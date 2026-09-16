@@ -5,9 +5,11 @@ import { FileExplorer } from './components/FileExplorer';
 import { FilePreviewModal } from './components/FilePreviewModal';
 import { UploadModal } from './components/UploadModal';
 import { SettingsModal } from './components/SettingsModal';
+import { LoginModal } from './components/LoginModal';
 import { StorageService } from './services/api';
 
 export function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(StorageService.isAuthenticated());
   const [drives, setDrives] = useState([]);
   const [activeDriveId, setActiveDriveId] = useState(null);
   const [activeTab, setActiveTab] = useState('all');
@@ -22,6 +24,7 @@ export function App() {
 
   // Load connected dynamic drives
   const loadDrives = async () => {
+    if (!isAuthenticated) return;
     const list = await StorageService.getDrives();
     setDrives(list);
     if (list.length > 0 && !activeDriveId) {
@@ -31,7 +34,7 @@ export function App() {
 
   // Load files for active drive & path
   const loadFiles = async () => {
-    if (!activeDriveId) return;
+    if (!isAuthenticated || !activeDriveId) return;
     const fileList = await StorageService.listFiles(activeDriveId, currentPath);
     if (searchQuery.trim()) {
       setFiles(fileList.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase())));
@@ -41,12 +44,27 @@ export function App() {
   };
 
   useEffect(() => {
-    loadDrives();
-  }, []);
+    if (isAuthenticated) {
+      loadDrives();
+    }
+  }, [isAuthenticated]);
 
   useEffect(() => {
-    loadFiles();
-  }, [activeDriveId, currentPath, searchQuery]);
+    if (isAuthenticated) {
+      loadFiles();
+    }
+  }, [activeDriveId, currentPath, searchQuery, isAuthenticated]);
+
+  const handleLogout = () => {
+    StorageService.logout();
+    setIsAuthenticated(false);
+    setFiles([]);
+    setDrives([]);
+  };
+
+  if (!isAuthenticated) {
+    return <LoginModal onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   const activeDrive = drives.find(d => d.id === activeDriveId) || drives[0];
 
@@ -71,6 +89,7 @@ export function App() {
           setSearchQuery={setSearchQuery}
           onOpenUpload={() => setShowUploadModal(true)}
           onOpenSettings={() => setShowSettingsModal(true)}
+          onLogout={handleLogout}
         />
 
         <FileExplorer 

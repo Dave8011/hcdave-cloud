@@ -7,9 +7,25 @@ const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'Syro@43210'; // Security Password
 
 app.use(cors());
 app.use(express.json());
+
+// Auth Middleware to protect API endpoints
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization || req.query.token;
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Unauthorized: Security token required' });
+  }
+
+  const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : authHeader;
+  if (token !== AUTH_PASSWORD) {
+    return res.status(403).json({ error: 'Forbidden: Invalid security password' });
+  }
+
+  next();
+}
 
 // Helper function to scan mounted drives dynamically on Linux/Unix
 function getMountedDrives() {
@@ -17,7 +33,6 @@ function getMountedDrives() {
   const searchDirs = ['/mnt', '/media', '/run/media'];
 
   try {
-    // Try scanning df -h or directory mount points
     let driveIndex = 1;
     for (const baseDir of searchDirs) {
       if (fs.existsSync(baseDir)) {
@@ -27,7 +42,6 @@ function getMountedDrives() {
           try {
             const stat = fs.statSync(fullPath);
             if (stat.isDirectory()) {
-              // Calculate space info if possible via df
               let totalGB = 500;
               let freeGB = 250;
               let usedGB = 250;
@@ -39,9 +53,7 @@ function getMountedDrives() {
                   usedGB = parseInt(dfOutput[2]) || 250;
                   freeGB = parseInt(dfOutput[3]) || 250;
                 }
-              } catch (e) {
-                // fallback if df fails
-              }
+              } catch (e) {}
 
               drives.push({
                 id: `drive-${driveIndex++}`,
@@ -61,7 +73,6 @@ function getMountedDrives() {
     console.error('Error scanning drives:', err);
   }
 
-  // Fallback default drives if no USB mounts detected yet (e.g., dev environment)
   if (drives.length === 0) {
     drives.push(
       { id: 'drive-1', name: 'Primary Storage (HDD)', mount: '/mnt/storage1', totalGB: 2000, usedGB: 850, freeGB: 1150, type: 'HDD' },
@@ -72,7 +83,7 @@ function getMountedDrives() {
   return drives;
 }
 
-// Set up Multer for dynamic upload
+// Multer storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const drives = getMountedDrives();
@@ -89,8 +100,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// API: Dynamic Connected Drives List
-app.get('/api/drives', (req, res) => {
+// Protected API Routes
+app.get('/api/drives', authMiddleware, (req, res) => {
   const drives = getMountedDrives();
   res.json({
     status: 'online',
@@ -100,8 +111,7 @@ app.get('/api/drives', (req, res) => {
   });
 });
 
-// API: List Files for a Dynamic Drive & Path
-app.get('/api/files', (req, res) => {
+app.get('/api/files', authMiddleware, (req, res) => {
   const drives = getMountedDrives();
   const driveId = req.query.driveId;
   const targetDrive = drives.find(d => d.id === driveId) || drives[0];
@@ -136,7 +146,7 @@ app.get('/api/files', (req, res) => {
         type,
         size: isDir ? 'Folder' : `${(stat.size / (1024 * 1024)).toFixed(1)} MB`,
         modified: stat.mtime.toISOString().split('T')[0],
-        url: `/api/download?driveId=${targetDrive.id}&path=${encodeURIComponent(path.join(reqPath, itemName))}`
+        url: `/api/download?driveId=${targetDrive.id}&path=${encodeURIComponent(path.join(reqPath, itemName))}&token=${AUTH_PASSWORD}`
       };
     }).filter(Boolean);
 
@@ -146,8 +156,7 @@ app.get('/api/files', (req, res) => {
   }
 });
 
-// API: Download & Video Streaming
-app.get('/api/download', (req, res) => {
+app.get('/api/download', authMiddleware, (req, res) => {
   const drives = getMountedDrives();
   const targetDrive = drives.find(d => d.id === req.query.driveId) || drives[0];
   const filePath = path.join(targetDrive.mount, path.normalize(req.query.path || ''));
@@ -183,12 +192,11 @@ app.get('/api/download', (req, res) => {
   }
 });
 
-// API: Upload File
-app.post('/api/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
   res.json({ success: true, message: 'File uploaded successfully', file: req.file });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Home Storage Agent running on port ${PORT}`);
+  console.log(`🔒 Secure Home Storage Agent running on port ${PORT}`);
   console.log(`🌐 Domain: hcdavecloud.in`);
 });

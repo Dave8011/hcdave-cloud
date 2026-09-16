@@ -1,4 +1,4 @@
-// Real Storage Agent API Client (Domain: hcdavecloud.in)
+// Real Storage Agent API Client with Security Password Auth
 
 export class StorageService {
   static getAgentUrl() {
@@ -9,33 +9,54 @@ export class StorageService {
     localStorage.setItem('AGENT_URL', url);
   }
 
-  // Fetch all dynamically connected plug & play drives from hardware
+  static getAuthToken() {
+    return localStorage.getItem('HCDAVE_AUTH_TOKEN') || '';
+  }
+
+  static setAuthToken(token) {
+    localStorage.setItem('HCDAVE_AUTH_TOKEN', token);
+  }
+
+  static isAuthenticated() {
+    return !!this.getAuthToken();
+  }
+
+  static logout() {
+    localStorage.removeItem('HCDAVE_AUTH_TOKEN');
+  }
+
+  static getHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    const token = this.getAuthToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  // Fetch dynamic drives with Auth header
   static async getDrives() {
     try {
-      const res = await fetch(`${this.getAgentUrl()}/api/drives`);
-      if (!res.ok) throw new Error('Agent offline');
+      const res = await fetch(`${this.getAgentUrl()}/api/drives`, {
+        headers: this.getHeaders()
+      });
+      if (!res.ok) throw new Error('Unauthorized or Agent offline');
       const data = await res.json();
       return data.drives || [];
     } catch (err) {
-      console.warn('Backend agent offline or connecting locally:', err);
-      // Try local fallback if custom tunnel URL is not reachable yet
-      try {
-        const localRes = await fetch('http://localhost:3001/api/drives');
-        if (localRes.ok) {
-          const localData = await localRes.json();
-          return localData.drives || [];
-        }
-      } catch (e) {}
+      console.warn('Backend agent request failed:', err);
       return [];
     }
   }
 
-  // List files for a specific dynamic drive ID and directory path
+  // List files with Auth header
   static async listFiles(driveId, currentPath = '/') {
     if (!driveId) return [];
     try {
       const url = `${this.getAgentUrl()}/api/files?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(currentPath)}`;
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: this.getHeaders()
+      });
       if (!res.ok) throw new Error('Failed to fetch files');
       return await res.json();
     } catch (err) {
@@ -44,7 +65,7 @@ export class StorageService {
     }
   }
 
-  // Upload file directly to target dynamic drive
+  // Upload file with Auth header
   static async uploadFile(driveId, file, targetPath = '/', onProgress) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -64,12 +85,18 @@ export class StorageService {
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(JSON.parse(xhr.responseText));
         } else {
-          reject(new Error('Upload failed'));
+          reject(new Error('Upload failed or unauthorized'));
         }
       });
 
       xhr.addEventListener('error', () => reject(new Error('Network error')));
       xhr.open('POST', `${this.getAgentUrl()}/api/upload`);
+      
+      const token = this.getAuthToken();
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+
       xhr.send(formData);
     });
   }

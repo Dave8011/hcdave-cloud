@@ -1,7 +1,7 @@
 import React from 'react';
-import { Search, UploadCloud, FolderPlus, Settings } from 'lucide-react';
+import { Search, UploadCloud, Settings, LogOut } from 'lucide-react';
 
-export function TopBar({ searchQuery, setSearchQuery, onOpenUpload, onOpenSettings }) {
+export function TopBar({ searchQuery, setSearchQuery, onOpenUpload, onOpenSettings, onLogout }) {
   return (
     <div className="top-bar">
       {/* Search Bar */}
@@ -10,7 +10,7 @@ export function TopBar({ searchQuery, setSearchQuery, onOpenUpload, onOpenSettin
         <input 
           type="text" 
           className="search-input" 
-          placeholder="Search files in 2TB HDD & 512GB SSD..." 
+          placeholder="Search files in connected drives..." 
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
@@ -18,14 +18,18 @@ export function TopBar({ searchQuery, setSearchQuery, onOpenUpload, onOpenSettin
 
       {/* Action Buttons */}
       <div className="top-actions">
-        <button className="btn btn-secondary" onClick={onOpenSettings} title="Settings & Connection">
+        <button className="btn btn-secondary" onClick={onOpenSettings} title="Settings & Tunnel">
           <Settings size={18} />
           <span>Config</span>
         </button>
 
         <button className="btn btn-primary" onClick={onOpenUpload}>
           <UploadCloud size={18} />
-          <span>Upload File</span>
+          <span>Upload</span>
+        </button>
+
+        <button className="btn btn-secondary" onClick={onLogout} title="Lock & Logout">
+          <LogOut size={18} color="var(--accent-rose)" />
         </button>
       </div>
     </div>
