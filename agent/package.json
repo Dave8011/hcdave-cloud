@@ -5,8 +5,7 @@
   "description": "Lightweight Storage Agent Server for TV Box / Router to serve USB HDD & SSD drives",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "build": "echo 'Backend agent built'"
+    "start": "node server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
