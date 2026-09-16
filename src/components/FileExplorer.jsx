@@ -1,149 +1,146 @@
 import React, { useState } from 'react';
-import { 
-  Folder, 
-  FileText, 
-  Image as ImageIcon, 
-  Film, 
-  Archive, 
-  Download, 
-  Eye, 
-  Trash2, 
-  Grid, 
-  List, 
-  ChevronRight,
-  HardDrive
+import {
+  Folder, FileText, Image as Img, Film, Archive,
+  Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen
 } from 'lucide-react';
 
-export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, onSelectFile, onDeleteFile }) {
-  const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'list'
+const TYPE_MAP = {
+  folder:   { cls: 'folder',   Icon: Folder },
+  image:    { cls: 'image',    Icon: Img },
+  video:    { cls: 'video',    Icon: Film },
+  archive:  { cls: 'archive',  Icon: Archive },
+  document: { cls: 'document', Icon: FileText },
+};
 
-  const getFileIcon = (file) => {
-    switch (file.type) {
-      case 'folder':
-        return <Folder size={24} />;
-      case 'image':
-        return <ImageIcon size={24} />;
-      case 'video':
-        return <Film size={24} />;
-      case 'archive':
-        return <Archive size={24} />;
-      default:
-        return <FileText size={24} />;
+export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, onSelectFile }) {
+  const [view, setView] = useState('grid');
+
+  const navigate = (file) => {
+    if (file.type === 'folder') {
+      setCurrentPath(currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`);
+    } else {
+      onSelectFile(file);
     }
   };
 
-  const getFileIconClass = (file) => {
-    switch (file.type) {
-      case 'folder': return 'folder';
-      case 'image': return 'image';
-      case 'video': return 'video';
-      case 'archive': return 'archive';
-      default: return 'document';
-    }
-  };
+  const pathParts = currentPath === '/' ? [] : currentPath.split('/').filter(Boolean);
 
   return (
     <div>
-      {/* Toolbar & Breadcrumbs */}
+      {/* Toolbar */}
       <div className="toolbar">
         <div className="breadcrumbs">
-          <HardDrive size={18} style={{ color: 'var(--accent-primary)' }} />
-          <span className="breadcrumb-item" onClick={() => setCurrentPath('/')}>
-            {activeDrive === 'hdd' ? '2TB HDD' : '512GB SSD'}
+          <HardDrive size={16} style={{ color: 'var(--indigo)' }} />
+          <span
+            className="bc-root"
+            onClick={() => setCurrentPath('/')}
+          >
+            {activeDrive?.name || 'Drive'}
           </span>
-          {currentPath !== '/' && (
-            <>
-              <ChevronRight size={16} style={{ color: 'var(--text-muted)' }} />
-              <span className="breadcrumb-item active">{currentPath}</span>
-            </>
-          )}
+          {pathParts.map((part, i) => (
+            <React.Fragment key={i}>
+              <ChevronRight size={14} className="bc-sep" />
+              <span
+                className={i === pathParts.length - 1 ? 'bc-current' : 'bc-root'}
+                onClick={() => {
+                  if (i < pathParts.length - 1) {
+                    setCurrentPath('/' + pathParts.slice(0, i + 1).join('/'));
+                  }
+                }}
+              >
+                {part}
+              </span>
+            </React.Fragment>
+          ))}
         </div>
 
-        {/* Grid vs List View Toggle */}
-        <div className="view-options">
-          <button 
-            className={`icon-btn ${viewMode === 'grid' ? 'active' : ''}`}
-            onClick={() => setViewMode('grid')}
-            title="Grid View"
-          >
-            <Grid size={18} />
+        <div className="view-toggle">
+          <button className={`view-btn ${view === 'grid' ? 'active' : ''}`} onClick={() => setView('grid')}>
+            <Grid3X3 size={15} />
           </button>
-          <button 
-            className={`icon-btn ${viewMode === 'list' ? 'active' : ''}`}
-            onClick={() => setViewMode('list')}
-            title="List View"
-          >
-            <List size={18} />
+          <button className={`view-btn ${view === 'list' ? 'active' : ''}`} onClick={() => setView('list')}>
+            <List size={15} />
           </button>
         </div>
       </div>
 
+      {/* Empty state */}
+      {files.length === 0 && (
+        <div className="empty-state">
+          <div className="empty-icon">
+            <FolderOpen size={36} />
+          </div>
+          <div className="empty-title">This folder is empty</div>
+          <div className="empty-desc">
+            {currentPath === '/'
+              ? 'Connect a USB drive to your device and it will appear here automatically.'
+              : 'No files found in this folder. Upload some files to get started.'}
+          </div>
+        </div>
+      )}
+
       {/* Grid View */}
-      {viewMode === 'grid' ? (
+      {files.length > 0 && view === 'grid' && (
         <div className="file-grid">
-          {files.map((file) => (
-            <div 
-              key={file.id} 
-              className="file-card"
-              onClick={() => {
-                if (file.type === 'folder') {
-                  setCurrentPath(`${currentPath === '/' ? '' : currentPath}/${file.name}`);
-                } else {
-                  onSelectFile(file);
-                }
-              }}
-            >
-              <div className="file-card-top">
-                <div className={`file-icon-box ${getFileIconClass(file)}`}>
-                  {getFileIcon(file)}
+          {files.map((file) => {
+            const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;
+            return (
+              <div key={file.id} className="file-card" onClick={() => navigate(file)}>
+                <div className="card-top">
+                  <div className={`file-icon ${cls}`}>
+                    <Icon size={22} />
+                  </div>
+                  <button
+                    className="card-action btn-icon"
+                    style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
+                    onClick={(e) => { e.stopPropagation(); onSelectFile(file); }}
+                  >
+                    <Eye size={14} />
+                  </button>
                 </div>
-                <div className="file-actions" onClick={(e) => e.stopPropagation()}>
-                  <button className="icon-btn" onClick={() => onSelectFile(file)} title="Preview / Action">
-                    <Eye size={16} />
+
+                <div className="card-bottom">
+                  <div className="card-name" title={file.name}>{file.name}</div>
+                  <div className="card-meta">
+                    <span>{file.type === 'folder' && file.items ? `${file.items} items` : file.size}</span>
+                    <span>{file.modified}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* List View */}
+      {files.length > 0 && view === 'list' && (
+        <div className="file-list">
+          {files.map((file, i) => {
+            const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;
+            return (
+              <div
+                key={file.id}
+                className="list-row"
+                style={{ animationDelay: `${i * 0.04}s` }}
+                onClick={() => navigate(file)}
+              >
+                <div className={`file-icon ${cls}`} style={{ width: 32, height: 32 }}>
+                  <Icon size={17} />
+                </div>
+                <div className="list-name">{file.name}</div>
+                <div className="list-meta">{file.modified}</div>
+                <div className="list-meta">{file.size}</div>
+                <div className="list-actions" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
+                    onClick={() => onSelectFile(file)}
+                  >
+                    <Eye size={14} />
                   </button>
                 </div>
               </div>
-
-              <div>
-                <div className="file-title" title={file.name}>{file.name}</div>
-                <div className="file-info">
-                  <span>{file.size || (file.items ? `${file.items} items` : 'Folder')}</span>
-                  <span>{file.modified}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        /* List View */
-        <div className="file-list">
-          {files.map((file) => (
-            <div 
-              key={file.id} 
-              className="file-list-row"
-              onClick={() => {
-                if (file.type === 'folder') {
-                  setCurrentPath(`${currentPath === '/' ? '' : currentPath}/${file.name}`);
-                } else {
-                  onSelectFile(file);
-                }
-              }}
-            >
-              <div className={`file-icon-box ${getFileIconClass(file)}`} style={{ width: 32, height: 32 }}>
-                {getFileIcon(file)}
-              </div>
-              <div className="file-title">{file.name}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{file.modified}</div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                {file.size || `${file.items} items`}
-              </div>
-              <div style={{ display: 'flex', gap: 4 }} onClick={(e) => e.stopPropagation()}>
-                <button className="icon-btn" onClick={() => onSelectFile(file)}>
-                  <Eye size={16} />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

@@ -1,91 +1,224 @@
-# ☁️ My Home Cloud Drive
-
-A self-hosted, Google Drive-style Personal Cloud Storage application designed for accessing a **2TB HDD** and **512GB SSD** attached to your home router / TV Box from anywhere in the world — without purchasing a static IP!
-
----
-
-## 🌟 Architecture Overview
-
-1. **Frontend Web App (Deployed on Vercel):**
-   - Sleek Google Drive-like interface built with React + Vite + Glassmorphism Dark Mode.
-   - Dual-drive support (Toggle between **2TB HDD** and **512GB SSD**).
-   - In-browser video streaming, photo lightboxes, drag-and-drop file uploads, and storage gauges.
-   - Built-in **Demo / Mock Mode** to test UI without hardware connected.
-
-2. **Backend Storage Agent (Runs on Home TV Box / Router):**
-   - Ultra-lightweight Node.js server (~30MB RAM footprint).
-   - Automatically reads mounted USB drives at `/mnt/hdd` and `/mnt/ssd`.
-   - Handles video streaming (HTTP `Range` requests), file listing, chunked uploads, and downloads.
-
-3. **Remote Bridge (Cloudflare Tunnel or WireGuard / Tailscale):**
-   - Connects Vercel to your home hard drive over HTTPS.
-   - **Zero Static IP required** • **Bypasses ISP CGNAT** • **Zero Open Router Ports**.
+# HC Dave Cloud 🖥️💾
+> **Personal home cloud storage** — Access your HDD/SSD from anywhere via your browser.  
+> Live at: **[drive.hcdavecloud.in](https://drive.hcdavecloud.in)**
 
 ---
 
-## 🚀 Quick Start (Running Locally / Testing Mock Mode)
+## How It Works
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
+```
+Your Phone / Browser
+       ↓ HTTPS
+drive.hcdavecloud.in  ←→  Cloudflare Tunnel  ←→  [TV Box / Mini PC]
+                                                       ↕  USB
+                                                  HDD 2TB + SSD 512GB
+```
 
-2. Start development server:
-   ```bash
-   npm run dev
-   ```
-
-3. Open `http://localhost:3000` in your browser.
-4. By default, **Demo / Mock Mode** is active! You can toggle between 2TB HDD and 512GB SSD, preview sample files, and test uploads right away.
-
----
-
-## 📦 How to Deploy Frontend to Vercel via GitHub
-
-1. Initialize git and commit:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit of Home Cloud Drive"
-   ```
-
-2. Create a new repository on [GitHub](https://github.com) and push your code:
-   ```bash
-   git remote add origin https://github.com/YOUR_USERNAME/home-cloud-drive.git
-   git branch -M main
-   git push -u origin main
-   ```
-
-3. Go to [Vercel.com](https://vercel.com) -> **Add New Project** -> Select your GitHub repository.
-4. Click **Deploy**. Your drive web app is now live on a global `https://my-drive.vercel.app` URL!
+- **Frontend** — React + Vite, deployed on Vercel (always on, free)
+- **Agent** — Node.js server running on your TV Box / Mini PC at home
+- **Tunnel** — Cloudflare Tunnel (free) — no static IP, no port forwarding
 
 ---
 
-## 🔌 Plug & Play Hardware Setup (When TV Box / Router Arrives)
+## Requirements
 
-When your TV Box, mini PC, or single-board computer arrives:
+| What | Why |
+|------|-----|
+| TV Box or Mini PC (Android / Linux) | Runs the storage agent 24/7 |
+| USB HDD or SSD | Your storage device |
+| Cloudflare account | Free tunnel + DNS for hcdavecloud.in |
+| Home internet | Must be ON for access |
 
-1. Plug your **2TB HDD** and **512GB SSD** into the USB ports.
-2. Clone this repo on the device and run the installer:
-   ```bash
-   chmod +x setup-agent.sh
-   ./setup-agent.sh
-   ```
-3. The installer creates an auto-boot background service running on port `3001`.
+> **Important:** Your TV Box / Mini PC must be running Linux or have a Linux-based environment.  
+> Android TV Boxes can run Linux via Termux or a lightweight Linux distro.
 
 ---
 
-## 🔒 Connecting Vercel to Home Storage (2 Easy Ways)
+## Step-by-Step Setup on TV Box / Mini PC
 
-### Option A: Cloudflare Tunnel (Zero Apps Needed on Phone)
-1. Install `cloudflared` on your TV box:
-   ```bash
-   cloudflared tunnel --url http://localhost:3001
-   ```
-2. Copy the generated `https://xxx.trycloudflare.com` URL.
-3. Open your Vercel Web App -> Click **Config** (Settings) -> Paste URL -> Click **Save & Connect**.
+### Step 1 — Get the Code
 
-### Option B: Tailscale WireGuard (Maximum Speed & Privacy)
-1. Install Tailscale on TV box: `curl -fsSL https://tailscale.com/install.sh | sh`
-2. Install Tailscale app on your phone.
-3. Open Vercel Web App -> Click **Config** -> Enter your Tailscale IP `http://100.x.y.z:3001`.
+Clone this repo on your TV Box or Mini PC:
+```bash
+git clone https://github.com/Dave8011/hcdave-cloud.git
+cd hcdave-cloud
+```
+
+Or copy the files using a USB stick.
+
+---
+
+### Step 2 — Run the Agent Setup
+
+```bash
+chmod +x setup-agent.sh
+sudo bash setup-agent.sh
+```
+
+This script will:
+1. **Install Node.js** (automatically, if not present)
+2. **Install npm dependencies** for the storage agent
+3. Ask you to **set a security password** (used to log in to the web drive)
+4. Create a **systemd service** so the agent starts automatically on boot
+
+At the end you'll see:
+```
+✅  HC Dave Cloud Agent Setup Complete!
+```
+
+---
+
+### Step 3 — Connect to Cloudflare Tunnel
+
+```bash
+chmod +x setup-cloudflare-tunnel.sh
+sudo bash setup-cloudflare-tunnel.sh
+```
+
+This script will:
+1. **Install cloudflared** (the Cloudflare tunnel client)
+2. Open a **browser link** for you to log into your Cloudflare account
+3. **Create a tunnel** named `hcdave-agent`
+4. **Route** `api.hcdavecloud.in` → your TV Box (port 3001)
+5. Create a **systemd service** to keep the tunnel alive forever
+
+At the end you'll see:
+```
+✅  Cloudflare Tunnel Setup Complete!
+   https://api.hcdavecloud.in — is your live agent
+   https://drive.hcdavecloud.in — is your web drive
+```
+
+---
+
+### Step 4 — Plug In Your Drives
+
+Simply **plug in your USB HDD or SSD** to any USB port on your TV Box.
+
+The agent **auto-detects** any drive mounted under:
+- `/mnt/` (e.g. `/mnt/my-hdd`)
+- `/media/` (most Linux distros auto-mount here)
+- `/run/media/username/` (Arch / Manjaro style)
+
+No configuration needed — just plug it in and it appears in your browser! 🎉
+
+---
+
+### Step 5 — Open Your Web Drive
+
+Go to **[drive.hcdavecloud.in](https://drive.hcdavecloud.in)** from any browser — phone, tablet, laptop, anywhere.
+
+Enter the **password** you set in Step 2 and you're in.
+
+---
+
+## Managing the Agent
+
+```bash
+# Check status
+sudo systemctl status hcdave-agent
+
+# View logs
+sudo journalctl -u hcdave-agent -f
+
+# Restart agent
+sudo systemctl restart hcdave-agent
+
+# Check Cloudflare tunnel
+sudo systemctl status cloudflared
+sudo journalctl -u cloudflared -f
+```
+
+---
+
+## Change the Password
+
+Edit `/opt/hcdave-agent/.env`:
+```bash
+sudo nano /opt/hcdave-agent/.env
+```
+
+Change:
+```
+AUTH_PASSWORD=YourNewStrongPassword@2024
+```
+
+Then restart the agent:
+```bash
+sudo systemctl restart hcdave-agent
+```
+
+---
+
+## Security Features
+
+| Feature | Status |
+|---------|--------|
+| Bearer token auth | ✅ All API routes protected |
+| Brute-force protection | ✅ 10 failed attempts = 15 min block |
+| CORS whitelist | ✅ Only drive.hcdavecloud.in |
+| Path traversal guard | ✅ All file paths sanitized |
+| No token in URLs | ✅ Token only in Authorization header |
+| HTTPS everywhere | ✅ Via Cloudflare (free TLS) |
+| Video streaming | ✅ HTTP Range headers supported |
+
+---
+
+## Architecture
+
+```
+/home/dave/dev/drive-wifi/
+├── src/                          # React frontend
+│   ├── App.jsx                   # Main app + auth gate
+│   ├── index.css                 # Design system + animations
+│   ├── components/
+│   │   ├── LoginPage.jsx         # Animated login page
+│   │   ├── Sidebar.jsx           # Drive list + navigation
+│   │   ├── TopBar.jsx            # Search + upload + settings
+│   │   ├── FileExplorer.jsx      # Grid/list file browser
+│   │   ├── FilePreviewModal.jsx  # Image/video preview + download
+│   │   ├── UploadModal.jsx       # Drag & drop multi-file upload
+│   │   └── SettingsModal.jsx     # Agent URL configuration
+│   └── services/
+│       └── api.js                # Secure API client (StorageService)
+│
+├── agent/
+│   ├── server.js                 # Production Node.js agent
+│   ├── package.json              # Agent dependencies
+│   └── .env.example              # Config template
+│
+├── setup-agent.sh                # TV Box setup script
+├── setup-cloudflare-tunnel.sh    # Cloudflare Tunnel setup script
+├── vercel.json                   # Vercel deployment config
+└── README.md                     # This file
+```
+
+---
+
+## Troubleshooting
+
+**Drive not showing up?**
+- Check if it's mounted: `df -h`
+- Manually mount: `sudo mount /dev/sda1 /mnt/my-hdd`
+- Check agent logs: `journalctl -u hcdave-agent -n 50`
+
+**Cannot login / wrong password?**
+- Check your password in `/opt/hcdave-agent/.env`
+- Restart agent after changes: `sudo systemctl restart hcdave-agent`
+
+**Tunnel not connecting?**
+- Check tunnel: `sudo cloudflared tunnel info hcdave-agent`
+- Check service: `sudo systemctl status cloudflared`
+- Re-authenticate: `sudo cloudflared tunnel login`
+
+**Vercel build failing?**
+- Go to Vercel → Project Settings → General
+- Set **Root Directory** to blank (empty)
+- Set **Build Command** to `npm run build`
+- Set **Output Directory** to `dist`
+
+---
+
+## License
+
+MIT — Personal use. Your data stays on your drives.

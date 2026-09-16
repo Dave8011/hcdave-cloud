@@ -1,67 +1,94 @@
-import React from 'react';
-import { X, Download, Film, Image as ImageIcon, FileText } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Download, Film, Image as Img, FileText, Archive, Folder } from 'lucide-react';
+import { StorageService } from '../services/api';
 
-export function FilePreviewModal({ file, onClose }) {
+const ICON_MAP = {
+  image:    { Icon: Img,      color: 'var(--cyan)' },
+  video:    { Icon: Film,     color: 'var(--rose)' },
+  archive:  { Icon: Archive,  color: 'var(--emerald)' },
+  folder:   { Icon: Folder,   color: 'var(--amber)' },
+  document: { Icon: FileText, color: 'var(--indigo)' },
+};
+
+export function FilePreviewModal({ file, driveId, onClose }) {
+  const [downloading, setDownloading] = useState(false);
   if (!file) return null;
+
+  const { Icon, color } = ICON_MAP[file.type] || ICON_MAP.document;
+
+  const handleDownload = async () => {
+    if (file.type === 'image' || file.type === 'video') {
+      // stream via secure fetch
+      setDownloading(true);
+      try {
+        await StorageService.downloadFile(driveId, file.path || file.name, file.name);
+      } catch (e) {
+        alert('Download failed: ' + e.message);
+      } finally {
+        setDownloading(false);
+      }
+    }
+  };
+
+  const streamUrl = file.streamUrl || null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '680px' }}>
-        {/* Modal Header */}
-        <div className="modal-header">
+      <div
+        className="modal-box"
+        style={{ maxWidth: 700 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="modal-title-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {file.type === 'image' && <ImageIcon color="var(--accent-cyan)" />}
-            {file.type === 'video' && <Film color="var(--accent-rose)" />}
-            {file.type !== 'image' && file.type !== 'video' && <FileText color="var(--accent-primary)" />}
-            <div className="modal-title" style={{ fontSize: '1.05rem' }}>{file.name}</div>
+            <Icon size={20} color={color} />
+            <span className="modal-title" style={{ fontSize: '1rem' }}>
+              {file.name}
+            </span>
           </div>
-          <button className="icon-btn" onClick={onClose}>
+          <button
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4, display: 'flex' }}
+          >
             <X size={20} />
           </button>
         </div>
 
-        {/* Content Viewer Body */}
-        <div style={{ margin: '20px 0', minHeight: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)', borderRadius: '12px', overflow: 'hidden' }}>
-          {file.type === 'image' && (
-            <img 
-              src={file.url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200'} 
-              alt={file.name} 
-              style={{ maxWidth: '100%', maxHeight: '420px', objectFit: 'contain' }} 
-            />
+        {/* Preview Body */}
+        <div className="preview-media-wrap">
+          {file.type === 'image' && streamUrl && (
+            <img src={streamUrl} alt={file.name} className="preview-img" />
           )}
 
-          {file.type === 'video' && (
-            <video controls autoPlay style={{ width: '100%', maxHeight: '400px' }}>
-              <source src={file.url || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'} type="video/mp4" />
-              Your browser does not support the video tag.
+          {file.type === 'video' && streamUrl && (
+            <video controls autoPlay className="preview-video">
+              <source src={streamUrl} type="video/mp4" />
             </video>
           )}
 
-          {file.type !== 'image' && file.type !== 'video' && (
-            <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              <FileText size={56} style={{ marginBottom: 12, opacity: 0.5 }} />
-              <div>File Preview for <strong>{file.name}</strong></div>
-              <div style={{ fontSize: '0.82rem', marginTop: 6, color: 'var(--text-muted)' }}>
-                Size: {file.size} • Modified: {file.modified}
+          {(file.type !== 'image' && file.type !== 'video') && (
+            <div className="preview-fallback">
+              <Icon size={56} color={color} style={{ opacity: 0.5, marginBottom: 12 }} />
+              <div style={{ fontWeight: 600 }}>{file.name}</div>
+              <div style={{ fontSize: '0.82rem', marginTop: 4, color: 'var(--text-3)' }}>
+                {file.size} · Modified {file.modified}
               </div>
             </div>
           )}
         </div>
 
-        {/* Modal Actions */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
-          <button className="btn btn-secondary" onClick={onClose}>Close</button>
-          <a 
-            href={file.url || '#'} 
-            download={file.name} 
-            target="_blank" 
-            rel="noreferrer"
+        {/* Footer */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Close</button>
+          <button
             className="btn btn-primary"
-            style={{ textDecoration: 'none' }}
+            onClick={handleDownload}
+            disabled={downloading}
           >
-            <Download size={18} />
-            <span>Download ({file.size})</span>
-          </a>
+            <Download size={16} />
+            <span>{downloading ? 'Downloading…' : `Download (${file.size})`}</span>
+          </button>
         </div>
       </div>
     </div>

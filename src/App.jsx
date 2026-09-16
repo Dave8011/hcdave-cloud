@@ -1,134 +1,113 @@
 import React, { useState, useEffect } from 'react';
-import { Sidebar } from './components/Sidebar';
-import { TopBar } from './components/TopBar';
-import { FileExplorer } from './components/FileExplorer';
-import { FilePreviewModal } from './components/FilePreviewModal';
-import { UploadModal } from './components/UploadModal';
-import { SettingsModal } from './components/SettingsModal';
-import { LoginModal } from './components/LoginModal';
-import { StorageService } from './services/api';
+import { LoginPage }       from './components/LoginPage';
+import { Sidebar }         from './components/Sidebar';
+import { TopBar }          from './components/TopBar';
+import { FileExplorer }    from './components/FileExplorer';
+import { FilePreviewModal} from './components/FilePreviewModal';
+import { UploadModal }     from './components/UploadModal';
+import { SettingsModal }   from './components/SettingsModal';
+import { StorageService }  from './services/api';
 
-export function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(StorageService.isAuthenticated());
-  const [drives, setDrives] = useState([]);
+export default function App() {
+  const [loggedIn,      setLoggedIn]      = useState(StorageService.isLoggedIn());
+  const [drives,        setDrives]        = useState([]);
   const [activeDriveId, setActiveDriveId] = useState(null);
-  const [activeTab, setActiveTab] = useState('all');
-  const [currentPath, setCurrentPath] = useState('/');
-  const [searchQuery, setSearchQuery] = useState('');
-  
-  const [files, setFiles] = useState([]);
-  const [selectedFile, setSelectedFile] = useState(null);
-  
-  const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [activeTab,     setActiveTab]     = useState('all');
+  const [currentPath,   setCurrentPath]   = useState('/');
+  const [search,        setSearch]        = useState('');
+  const [files,         setFiles]         = useState([]);
+  const [selectedFile,  setSelectedFile]  = useState(null);
+  const [showUpload,    setShowUpload]    = useState(false);
+  const [showSettings,  setShowSettings]  = useState(false);
 
-  // Load connected dynamic drives
+  /* ── Drive loading ── */
   const loadDrives = async () => {
-    if (!isAuthenticated) return;
     const list = await StorageService.getDrives();
     setDrives(list);
-    if (list.length > 0 && !activeDriveId) {
-      setActiveDriveId(list[0].id);
-    }
+    if (list.length && !activeDriveId) setActiveDriveId(list[0].id);
   };
 
-  // Load files for active drive & path
+  /* ── File loading ── */
   const loadFiles = async () => {
-    if (!isAuthenticated || !activeDriveId) return;
-    const fileList = await StorageService.listFiles(activeDriveId, currentPath);
-    if (searchQuery.trim()) {
-      setFiles(fileList.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase())));
-    } else {
-      setFiles(fileList);
-    }
+    if (!activeDriveId) return;
+    const all = await StorageService.listFiles(activeDriveId, currentPath);
+    setFiles(
+      search.trim()
+        ? all.filter(f => f.name.toLowerCase().includes(search.toLowerCase()))
+        : all
+    );
   };
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      loadDrives();
-    }
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      loadFiles();
-    }
-  }, [activeDriveId, currentPath, searchQuery, isAuthenticated]);
+  useEffect(() => { if (loggedIn) loadDrives(); }, [loggedIn]);
+  useEffect(() => { if (loggedIn) loadFiles();  }, [activeDriveId, currentPath, search, loggedIn]);
 
   const handleLogout = () => {
     StorageService.logout();
-    setIsAuthenticated(false);
-    setFiles([]);
+    setLoggedIn(false);
     setDrives([]);
+    setFiles([]);
+    setActiveDriveId(null);
   };
 
-  if (!isAuthenticated) {
-    return <LoginModal onLoginSuccess={() => setIsAuthenticated(true)} />;
+  /* ── Not authenticated ── */
+  if (!loggedIn) {
+    return <LoginPage onSuccess={() => setLoggedIn(true)} />;
   }
 
-  const activeDrive = drives.find(d => d.id === activeDriveId) || drives[0];
+  const activeDrive = drives.find(d => d.id === activeDriveId);
 
   return (
     <div className="app-container">
-      {/* Dynamic Plug & Play Sidebar */}
-      <Sidebar 
+      <Sidebar
         drives={drives}
         activeDriveId={activeDriveId}
-        setActiveDriveId={(id) => {
-          setActiveDriveId(id);
-          setCurrentPath('/');
-        }}
+        setActiveDriveId={(id) => { setActiveDriveId(id); setCurrentPath('/'); }}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
       />
 
-      {/* Main Content Explorer */}
       <main className="main-content">
-        <TopBar 
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          onOpenUpload={() => setShowUploadModal(true)}
-          onOpenSettings={() => setShowSettingsModal(true)}
+        <TopBar
+          search={search}
+          setSearch={setSearch}
+          onUpload={() => setShowUpload(true)}
+          onSettings={() => setShowSettings(true)}
           onLogout={handleLogout}
         />
 
-        <FileExplorer 
+        <FileExplorer
           files={files}
           activeDrive={activeDrive}
           currentPath={currentPath}
-          setCurrentPath={setCurrentPath}
-          onSelectFile={(file) => setSelectedFile(file)}
-          onDeleteFile={(file) => console.log('Delete file:', file)}
+          setCurrentPath={(p) => { setCurrentPath(p); setSearch(''); }}
+          onSelectFile={setSelectedFile}
         />
       </main>
 
-      {/* Modals */}
+      {/* ── Modals ── */}
       {selectedFile && (
-        <FilePreviewModal 
-          file={selectedFile} 
-          onClose={() => setSelectedFile(null)} 
+        <FilePreviewModal
+          file={selectedFile}
+          driveId={activeDriveId}
+          onClose={() => setSelectedFile(null)}
         />
       )}
 
-      {showUploadModal && (
-        <UploadModal 
+      {showUpload && (
+        <UploadModal
           activeDrive={activeDrive}
-          onClose={() => setShowUploadModal(false)}
-          onUploadComplete={() => loadFiles()}
+          currentPath={currentPath}
+          onClose={() => setShowUpload(false)}
+          onUploadComplete={loadFiles}
         />
       )}
 
-      {showSettingsModal && (
-        <SettingsModal 
-          onClose={() => setShowSettingsModal(false)}
-          onSave={() => {
-            loadDrives();
-            loadFiles();
-          }}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onSave={() => { loadDrives(); loadFiles(); }}
         />
       )}
     </div>
   );
 }
-
-export default App;

@@ -1,4 +1,5 @@
-// Real Storage Agent API Client with Security Password Auth
+// HC Dave Cloud — Production API Client
+// Domain: hcdavecloud.in
 
 export class StorageService {
   static getAgentUrl() {
@@ -6,98 +7,113 @@ export class StorageService {
   }
 
   static setAgentUrl(url) {
-    localStorage.setItem('AGENT_URL', url);
+    localStorage.setItem('AGENT_URL', url.replace(/\/$/, ''));
   }
 
-  static getAuthToken() {
+  static getToken() {
     return localStorage.getItem('HCDAVE_AUTH_TOKEN') || '';
   }
 
-  static setAuthToken(token) {
-    localStorage.setItem('HCDAVE_AUTH_TOKEN', token);
+  static setToken(t) {
+    localStorage.setItem('HCDAVE_AUTH_TOKEN', t);
   }
 
-  static isAuthenticated() {
-    return !!this.getAuthToken();
+  static isLoggedIn() {
+    return !!this.getToken();
   }
 
   static logout() {
     localStorage.removeItem('HCDAVE_AUTH_TOKEN');
   }
 
-  static getHeaders() {
-    const headers = { 'Content-Type': 'application/json' };
-    const token = this.getAuthToken();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    return headers;
+  static headers() {
+    return {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${this.getToken()}`
+    };
   }
 
-  // Fetch dynamic drives with Auth header
+  // GET /api/drives — list all detected plug & play drives
   static async getDrives() {
     try {
-      const res = await fetch(`${this.getAgentUrl()}/api/drives`, {
-        headers: this.getHeaders()
+      const r = await fetch(`${this.getAgentUrl()}/api/drives`, {
+        headers: this.headers()
       });
-      if (!res.ok) throw new Error('Unauthorized or Agent offline');
-      const data = await res.json();
+      if (r.status === 401 || r.status === 403) {
+        this.logout();
+        window.location.reload();
+        return [];
+      }
+      if (!r.ok) throw new Error('Agent offline');
+      const data = await r.json();
       return data.drives || [];
-    } catch (err) {
-      console.warn('Backend agent request failed:', err);
+    } catch {
       return [];
     }
   }
 
-  // List files with Auth header
-  static async listFiles(driveId, currentPath = '/') {
+  // GET /api/files — list files in a drive path
+  static async listFiles(driveId, path = '/') {
     if (!driveId) return [];
     try {
-      const url = `${this.getAgentUrl()}/api/files?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(currentPath)}`;
-      const res = await fetch(url, {
-        headers: this.getHeaders()
-      });
-      if (!res.ok) throw new Error('Failed to fetch files');
-      return await res.json();
-    } catch (err) {
-      console.error('Error fetching files:', err);
+      const r = await fetch(
+        `${this.getAgentUrl()}/api/files?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(path)}`,
+        { headers: this.headers() }
+      );
+      if (!r.ok) throw new Error();
+      return await r.json();
+    } catch {
       return [];
     }
   }
 
-  // Upload file with Auth header
-  static async uploadFile(driveId, file, targetPath = '/', onProgress) {
+  // POST /api/upload — upload a file with real progress
+  static uploadFile(driveId, file, path = '/', onProgress) {
     return new Promise((resolve, reject) => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('driveId', driveId);
+      form.append('path', path);
+
       const xhr = new XMLHttpRequest();
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('driveId', driveId);
-      formData.append('path', targetPath);
 
-      xhr.upload.addEventListener('progress', (e) => {
+      xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) {
-          const percent = Math.round((e.loaded / e.total) * 100);
-          onProgress(percent);
+          onProgress(Math.round((e.loaded / e.total) * 100));
         }
-      });
+      };
 
-      xhr.addEventListener('load', () => {
+      xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(JSON.parse(xhr.responseText));
         } else {
-          reject(new Error('Upload failed or unauthorized'));
+          reject(new Error('Upload failed'));
         }
-      });
+      };
 
-      xhr.addEventListener('error', () => reject(new Error('Network error')));
+      xhr.onerror = () => reject(new Error('Network error'));
+
       xhr.open('POST', `${this.getAgentUrl()}/api/upload`);
-      
-      const token = this.getAuthToken();
-      if (token) {
-        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-      }
-
-      xhr.send(formData);
+      xhr.setRequestHeader('Authorization', `Bearer ${this.getToken()}`);
+      xhr.send(form);
     });
+  }
+
+  // Build a secure download URL (token in Authorization header via fetch + blob)
+  static getDownloadUrl(driveId, filePath) {
+    return `${this.getAgentUrl()}/api/download?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}`;
+  }
+
+  // Trigger browser download securely via fetch + blob URL
+  static async downloadFile(driveId, filePath, fileName) {
+    const url = this.getDownloadUrl(driveId, filePath);
+    const r = await fetch(url, { headers: this.headers() });
+    if (!r.ok) throw new Error('Download failed');
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fileName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
   }
 }

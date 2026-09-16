@@ -1,35 +1,38 @@
 import React from 'react';
 import { Search, UploadCloud, Settings, LogOut } from 'lucide-react';
 
-export function TopBar({ searchQuery, setSearchQuery, onOpenUpload, onOpenSettings, onLogout }) {
+export function TopBar({ search, setSearch, onUpload, onSettings, onLogout }) {
   return (
     <div className="top-bar">
-      {/* Search Bar */}
-      <div className="search-box">
-        <Search size={18} className="search-icon" />
-        <input 
-          type="text" 
-          className="search-input" 
-          placeholder="Search files in connected drives..." 
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+      <div className="search-wrap">
+        <Search size={16} className="search-icon-pos" />
+        <input
+          type="search"
+          className="search-input"
+          placeholder="Search files and folders..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
         />
       </div>
 
-      {/* Action Buttons */}
       <div className="top-actions">
-        <button className="btn btn-secondary" onClick={onOpenSettings} title="Settings & Tunnel">
-          <Settings size={18} />
+        <button className="btn btn-ghost" onClick={onSettings}>
+          <Settings size={16} />
           <span>Config</span>
         </button>
 
-        <button className="btn btn-primary" onClick={onOpenUpload}>
-          <UploadCloud size={18} />
+        <button className="btn btn-primary" onClick={onUpload}>
+          <UploadCloud size={16} />
           <span>Upload</span>
         </button>
 
-        <button className="btn btn-secondary" onClick={onLogout} title="Lock & Logout">
-          <LogOut size={18} color="var(--accent-rose)" />
+        <button
+          className="btn-icon danger"
+          onClick={onLogout}
+          title="Lock & sign out"
+          style={{ padding: '10px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'var(--text-2)', transition: 'var(--transition)' }}
+        >
+          <LogOut size={16} />
         </button>
       </div>
     </div>

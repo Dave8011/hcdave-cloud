@@ -1,109 +1,111 @@
 import React from 'react';
-import { HardDrive, Cpu, Folder, Star, Clock, Trash2, ShieldCheck, Wifi, PlusCircle } from 'lucide-react';
+import { HardDrive, Cpu, Folder, Clock, Star, ShieldCheck, Wifi, PlugZap } from 'lucide-react';
 
 export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, setActiveTab }) {
   return (
     <aside className="sidebar">
       <div>
-        {/* Brand Header */}
+        {/* Brand */}
         <div className="brand">
           <div className="brand-icon">
-            <Wifi size={24} />
+            <Wifi size={20} />
           </div>
           <div>
-            <div className="brand-title">HC Dave Cloud</div>
-            <div className="brand-subtitle">hcdavecloud.in</div>
+            <div className="brand-name">HC Dave Cloud</div>
+            <div className="brand-domain">hcdavecloud.in</div>
           </div>
         </div>
 
-        {/* Dynamic Plug & Play Drives Section */}
+        {/* Connected Drives */}
         <div className="drives-section">
           <div className="section-label">
-            <span>Connected Drives ({drives.length})</span>
-            <span style={{ fontSize: '0.65rem', color: 'var(--accent-cyan)' }}>Plug & Play</span>
+            <span>Storage Drives</span>
+            <span style={{ color: 'var(--cyan)', fontWeight: 700, letterSpacing: '0.04em' }}>
+              {drives.length} detected
+            </span>
           </div>
 
-          {drives.length > 0 ? (
-            drives.map((drive) => {
-              const usedPercent = Math.round((drive.usedGB / drive.totalGB) * 100);
-              const isActive = activeDriveId === drive.id;
+          {drives.length === 0 ? (
+            <div className="no-drives">
+              <PlugZap size={28} style={{ marginBottom: 10, color: 'var(--text-3)' }} />
+              <div>No drives detected.</div>
+              <div>Plug in a USB HDD or SSD and refresh the page.</div>
+            </div>
+          ) : (
+            drives.map((drive, i) => {
+              const pct = Math.min(100, Math.round((drive.usedGB / drive.totalGB) * 100));
+              const isActive = drive.id === activeDriveId;
+              const isSSD = drive.type === 'SSD';
 
               return (
-                <div 
+                <div
                   key={drive.id}
                   className={`drive-card ${isActive ? 'active' : ''}`}
                   onClick={() => setActiveDriveId(drive.id)}
+                  style={{ animationDelay: `${i * 0.06}s` }}
                 >
                   <div className="drive-header">
                     <div className="drive-info">
-                      {drive.type === 'SSD' ? (
-                        <Cpu size={18} className="drive-icon" style={{ color: 'var(--accent-cyan)' }} />
-                      ) : (
-                        <HardDrive size={18} className="drive-icon" />
-                      )}
-                      <span className="drive-name">{drive.name}</span>
+                      <span className="drive-icon-wrap">
+                        {isSSD
+                          ? <Cpu size={17} />
+                          : <HardDrive size={17} />
+                        }
+                      </span>
+                      <span className="drive-label">{drive.name}</span>
                     </div>
-                    <span className="drive-badge">{drive.totalGB} GB</span>
+                    <span className="drive-tag">{drive.type}</span>
                   </div>
-                  <div className="progress-bar-bg">
-                    <div 
-                      className="progress-bar-fill" 
-                      style={{ 
-                        width: `${usedPercent}%`,
-                        background: drive.type === 'SSD' 
-                          ? 'linear-gradient(90deg, var(--accent-cyan), var(--accent-emerald))'
-                          : 'linear-gradient(90deg, var(--accent-primary), var(--accent-cyan))'
+
+                  <div className="prog-bg">
+                    <div
+                      className="prog-fill"
+                      style={{
+                        width: `${pct}%`,
+                        background: isSSD
+                          ? 'linear-gradient(90deg, var(--cyan), var(--emerald))'
+                          : 'linear-gradient(90deg, var(--indigo), var(--violet))'
                       }}
-                    ></div>
+                    />
                   </div>
+
                   <div className="drive-meta">
                     <span>{drive.usedGB} GB used</span>
-                    <span>{drive.freeGB} GB free</span>
+                    <span>{drive.freeGB} GB free · {drive.totalGB} GB</span>
                   </div>
                 </div>
               );
             })
-          ) : (
-            <div style={{ padding: '16px', textOverflow: 'ellipsis', background: 'var(--bg-card)', borderRadius: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
-              No USB drives detected. Plug in your HDD or SSD to start!
-            </div>
           )}
         </div>
 
-        {/* Navigation Menu */}
-        <div className="section-label">Navigation</div>
+        {/* Navigation */}
+        <div className="section-label" style={{ marginTop: 8 }}>Browse</div>
         <nav className="nav-menu">
-          <div 
-            className={`nav-item ${activeTab === 'all' ? 'active' : ''}`}
-            onClick={() => setActiveTab('all')}
-          >
-            <Folder size={18} />
-            <span>All Files</span>
-          </div>
-          <div 
-            className={`nav-item ${activeTab === 'recent' ? 'active' : ''}`}
-            onClick={() => setActiveTab('recent')}
-          >
-            <Clock size={18} />
-            <span>Recent</span>
-          </div>
-          <div 
-            className={`nav-item ${activeTab === 'starred' ? 'active' : ''}`}
-            onClick={() => setActiveTab('starred')}
-          >
-            <Star size={18} />
-            <span>Favorites</span>
-          </div>
+          {[
+            { key: 'all',     Icon: Folder, label: 'All Files' },
+            { key: 'recent',  Icon: Clock,  label: 'Recent' },
+            { key: 'starred', Icon: Star,   label: 'Favorites' },
+          ].map(({ key, Icon, label }) => (
+            <div
+              key={key}
+              className={`nav-item ${activeTab === key ? 'active' : ''}`}
+              onClick={() => setActiveTab(key)}
+            >
+              <Icon size={17} />
+              <span>{label}</span>
+            </div>
+          ))}
         </nav>
       </div>
 
-      {/* Connection Status Pill */}
-      <div className="status-pill">
-        <div className="status-indicator">
-          <span className="dot"></span>
-          <span style={{ fontWeight: 600 }}>Cloudflare Active</span>
+      {/* Connection status */}
+      <div className="conn-pill">
+        <div className="flex items-center">
+          <div className="conn-dot" />
+          <span className="conn-label">Cloudflare Active</span>
         </div>
-        <ShieldCheck size={16} color="var(--accent-emerald)" />
+        <ShieldCheck size={15} color="var(--emerald)" />
       </div>
     </aside>
   );
