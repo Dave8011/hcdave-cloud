@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { LoginPage }       from './components/LoginPage';
-import { Sidebar }         from './components/Sidebar';
-import { TopBar }          from './components/TopBar';
-import { FileExplorer }    from './components/FileExplorer';
-import { FilePreviewModal} from './components/FilePreviewModal';
-import { UploadModal }     from './components/UploadModal';
-import { SettingsModal }   from './components/SettingsModal';
-import { StorageService }  from './services/api';
+import { LoginPage }        from './components/LoginPage';
+import { IntroAnimation }   from './components/IntroAnimation';
+import { Sidebar }          from './components/Sidebar';
+import { TopBar }           from './components/TopBar';
+import { FileExplorer }     from './components/FileExplorer';
+import { FilePreviewModal } from './components/FilePreviewModal';
+import { UploadModal }      from './components/UploadModal';
+import { SettingsModal }    from './components/SettingsModal';
+import { StorageService }   from './services/api';
 
 export default function App() {
-  const [loggedIn,      setLoggedIn]      = useState(StorageService.isLoggedIn());
+  // Show intro only once per browser session
+  const [showIntro,    setShowIntro]    = useState(() => !sessionStorage.getItem('intro_seen'));
+  const [loggedIn,     setLoggedIn]     = useState(StorageService.isLoggedIn());
   const [drives,        setDrives]        = useState([]);
   const [activeDriveId, setActiveDriveId] = useState(null);
   const [activeTab,     setActiveTab]     = useState('all');
@@ -48,6 +51,18 @@ export default function App() {
     setFiles([]);
     setActiveDriveId(null);
   };
+
+  /* ── Intro ── */
+  if (showIntro) {
+    return (
+      <IntroAnimation
+        onDone={() => {
+          sessionStorage.setItem('intro_seen', '1');
+          setShowIntro(false);
+        }}
+      />
+    );
+  }
 
   /* ── Not authenticated ── */
   if (!loggedIn) {

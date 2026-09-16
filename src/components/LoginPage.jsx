@@ -1,39 +1,44 @@
 import React, { useState } from 'react';
-import { Lock, Eye, EyeOff, ShieldCheck, AlertCircle, Wifi } from 'lucide-react';
+import { Lock, Eye, EyeOff, ShieldCheck, AlertCircle, WifiOff } from 'lucide-react';
 
 export function LoginPage({ onSuccess }) {
   const [password, setPassword] = useState('');
-  const [showPwd, setShowPwd] = useState(false);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [shake, setShake] = useState(false);
+  const [showPwd,  setShowPwd]  = useState(false);
+  const [error,    setError]    = useState('');
+  const [loading,  setLoading]  = useState(false);
+  const [shake,    setShake]    = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!password.trim()) {
-      triggerError('Password is required');
+      triggerError('Password is required.');
       return;
     }
     setLoading(true);
     setError('');
 
-    // Verify password against agent
     try {
-      const agentUrl = localStorage.getItem('AGENT_URL') || 'https://api.hcdavecloud.in';
+      const agentUrl = (localStorage.getItem('AGENT_URL') || 'https://api.hcdavecloud.in').replace(/\/$/, '');
       const res = await fetch(`${agentUrl}/api/drives`, {
-        headers: { Authorization: `Bearer ${password}` }
+        headers: { Authorization: `Bearer ${password}` },
+        signal: AbortSignal.timeout(8000), // 8 s timeout
       });
 
       if (res.ok) {
         localStorage.setItem('HCDAVE_AUTH_TOKEN', password);
         onSuccess();
-      } else {
+      } else if (res.status === 401 || res.status === 403) {
         triggerError('Incorrect password. Access denied.');
+      } else {
+        triggerError(`Agent returned an error (${res.status}). Check the agent URL in settings.`);
       }
-    } catch {
-      // If network unreachable, still save token and try
-      localStorage.setItem('HCDAVE_AUTH_TOKEN', password);
-      onSuccess();
+    } catch (err) {
+      // NEVER auto-login on network failure — agent must be reachable
+      if (err.name === 'TimeoutError') {
+        triggerError('Connection timed out. Is the agent running?');
+      } else {
+        triggerError('Cannot reach the storage agent. Check your internet or agent URL.');
+      }
     } finally {
       setLoading(false);
     }
@@ -47,25 +52,33 @@ export function LoginPage({ onSuccess }) {
 
   return (
     <div className="login-page">
-      {/* Animated background orbs */}
       <div className="login-orb login-orb-1" />
       <div className="login-orb login-orb-2" />
       <div className="login-orb login-orb-3" />
 
       <div className={`login-card ${shake ? 'login-shake' : ''}`}>
-        {/* Logo */}
+        {/* Logo mark */}
         <div className="login-logo-wrap">
           <div className="login-logo">
-            <Wifi size={30} />
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <path d="M8 24V8h6c4.4 0 8 3.6 8 8s-3.6 8-8 8H8z"
+                fill="url(#dgrad)" strokeWidth="0" />
+              <defs>
+                <linearGradient id="dgrad" x1="8" y1="8" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+                  <stop stopColor="#fff" />
+                  <stop offset="1" stopColor="rgba(255,255,255,0.6)" />
+                </linearGradient>
+              </defs>
+            </svg>
           </div>
         </div>
 
         <h1 className="login-heading">HC Dave Cloud</h1>
         <p className="login-subheading">
-          Enter your security password to access<br />your private home storage drives.
+          Enter your password to unlock<br />your private home storage.
         </p>
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
           <div className="field">
             <label className="field-label">
               <Lock size={12} />
@@ -80,6 +93,7 @@ export function LoginPage({ onSuccess }) {
                 onChange={(e) => { setPassword(e.target.value); setError(''); }}
                 autoFocus
                 autoComplete="current-password"
+                disabled={loading}
               />
               <button
                 type="button"
@@ -98,15 +112,29 @@ export function LoginPage({ onSuccess }) {
             )}
           </div>
 
-          <button type="submit" className="btn btn-primary login-submit" disabled={loading}>
+          <button
+            type="submit"
+            className="btn btn-primary login-submit"
+            disabled={loading}
+          >
             {loading ? <div className="spinner" /> : <Lock size={16} />}
             <span>{loading ? 'Verifying...' : 'Unlock Drive'}</span>
           </button>
         </form>
 
+        {/* Agent offline hint */}
+        {error && error.includes('agent') && (
+          <div style={{ marginTop: 14, padding: '12px 14px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 'var(--r-sm)', fontSize: '0.76rem', color: 'var(--amber)', lineHeight: 1.7 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, marginBottom: 4 }}>
+              <WifiOff size={13} /> Agent offline?
+            </div>
+            Go to <strong>Config</strong> (after login with correct URL) or check that your TV Box is powered on and the tunnel is running.
+          </div>
+        )}
+
         <div className="login-footer">
           <ShieldCheck size={14} color="var(--emerald)" />
-          <span>End-to-end encrypted via Cloudflare</span>
+          <span>Password verified against your home agent</span>
         </div>
       </div>
     </div>
