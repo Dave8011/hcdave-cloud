@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { LoginPage }        from './components/LoginPage';
 import { IntroAnimation }   from './components/IntroAnimation';
 import { Sidebar }          from './components/Sidebar';
@@ -9,29 +9,40 @@ import { UploadModal }      from './components/UploadModal';
 import { SettingsModal }    from './components/SettingsModal';
 import { StorageService }   from './services/api';
 
+/*
+  App State Machine:
+    'intro'   → full cinematic D-mark (app load / page refresh)
+    'login'   → login page
+    'flash'   → quick 1-second D-mark flash (between transitions)
+    'app'     → main file explorer
+*/
 export default function App() {
-  // Show intro only once per browser session
-  const [showIntro,    setShowIntro]    = useState(() => !sessionStorage.getItem('intro_seen'));
-  const [loggedIn,     setLoggedIn]     = useState(StorageService.isLoggedIn());
-  const [drives,        setDrives]        = useState([]);
+  const [screen,       setScreen]      = useState('intro'); // always start with intro
+  const [flashTarget,  setFlashTarget] = useState(null);    // where to go after flash
+  const [drives,        setDrives]     = useState([]);
   const [activeDriveId, setActiveDriveId] = useState(null);
-  const [activeTab,     setActiveTab]     = useState('all');
-  const [currentPath,   setCurrentPath]   = useState('/');
-  const [search,        setSearch]        = useState('');
-  const [files,         setFiles]         = useState([]);
-  const [selectedFile,  setSelectedFile]  = useState(null);
-  const [showUpload,    setShowUpload]    = useState(false);
-  const [showSettings,  setShowSettings]  = useState(false);
+  const [activeTab,    setActiveTab]   = useState('all');
+  const [currentPath,  setCurrentPath] = useState('/');
+  const [search,       setSearch]      = useState('');
+  const [files,        setFiles]       = useState([]);
+  const [selectedFile, setSelectedFile]= useState(null);
+  const [showUpload,   setShowUpload]  = useState(false);
+  const [showSettings, setShowSettings]= useState(false);
 
-  /* ── Drive loading ── */
-  const loadDrives = async () => {
+  /* Flash helper — show quick D then go somewhere */
+  const flashTo = useCallback((target) => {
+    setFlashTarget(target);
+    setScreen('flash');
+  }, []);
+
+  /* Drive + file loading */
+  const loadDrives = useCallback(async () => {
     const list = await StorageService.getDrives();
     setDrives(list);
     if (list.length && !activeDriveId) setActiveDriveId(list[0].id);
-  };
+  }, [activeDriveId]);
 
-  /* ── File loading ── */
-  const loadFiles = async () => {
+  const loadFiles = useCallback(async () => {
     if (!activeDriveId) return;
     const all = await StorageService.listFiles(activeDriveId, currentPath);
     setFiles(
@@ -39,36 +50,58 @@ export default function App() {
         ? all.filter(f => f.name.toLowerCase().includes(search.toLowerCase()))
         : all
     );
-  };
+  }, [activeDriveId, currentPath, search]);
 
-  useEffect(() => { if (loggedIn) loadDrives(); }, [loggedIn]);
-  useEffect(() => { if (loggedIn) loadFiles();  }, [activeDriveId, currentPath, search, loggedIn]);
+  useEffect(() => {
+    if (screen === 'app') { loadDrives(); }
+  }, [screen]);
 
+  useEffect(() => {
+    if (screen === 'app') { loadFiles(); }
+  }, [activeDriveId, currentPath, search, screen]);
+
+  /* ── Logout: flash then go to login ── */
   const handleLogout = () => {
     StorageService.logout();
-    setLoggedIn(false);
     setDrives([]);
     setFiles([]);
     setActiveDriveId(null);
+    flashTo('login');
   };
 
-  /* ── Intro ── */
-  if (showIntro) {
+  /* ── Login success: flash then go to app ── */
+  const handleLoginSuccess = () => {
+    flashTo('app');
+  };
+
+  /* ── Full intro → login ── */
+  if (screen === 'intro') {
     return (
       <IntroAnimation
-        onDone={() => {
-          sessionStorage.setItem('intro_seen', '1');
-          setShowIntro(false);
-        }}
+        fast={false}
+        onDone={() =>
+          setScreen(StorageService.isLoggedIn() ? 'app' : 'login')
+        }
       />
     );
   }
 
-  /* ── Not authenticated ── */
-  if (!loggedIn) {
-    return <LoginPage onSuccess={() => setLoggedIn(true)} />;
+  /* ── Quick flash between states ── */
+  if (screen === 'flash') {
+    return (
+      <IntroAnimation
+        fast={true}
+        onDone={() => setScreen(flashTarget || 'login')}
+      />
+    );
   }
 
+  /* ── Login ── */
+  if (screen === 'login') {
+    return <LoginPage onSuccess={handleLoginSuccess} />;
+  }
+
+  /* ── Main App ── */
   const activeDrive = drives.find(d => d.id === activeDriveId);
 
   return (
@@ -99,7 +132,6 @@ export default function App() {
         />
       </main>
 
-      {/* ── Modals ── */}
       {selectedFile && (
         <FilePreviewModal
           file={selectedFile}
