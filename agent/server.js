@@ -5,6 +5,18 @@ const path = require('path');
 const { execSync } = require('child_process');
 const multer = require('multer');
 
+// Load environment variables from agent/.env if available
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envConfig = fs.readFileSync(envPath, 'utf8');
+  envConfig.split('\n').forEach(line => {
+    const [key, value] = line.split('=');
+    if (key && value) {
+      process.env[key.trim()] = value.trim();
+    }
+  });
+}
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'Syro@43210'; // Security Password
