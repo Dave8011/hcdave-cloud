@@ -6,7 +6,9 @@ import { TopBar }           from './components/TopBar';
 import { FileExplorer }     from './components/FileExplorer';
 import { FilePreviewModal } from './components/FilePreviewModal';
 import { UploadModal }      from './components/UploadModal';
+import { NewFolderModal }   from './components/NewFolderModal';
 import { SettingsModal }    from './components/SettingsModal';
+import { SharePage }        from './components/SharePage';
 import { StorageService }   from './services/api';
 
 /*
@@ -17,6 +19,7 @@ import { StorageService }   from './services/api';
     'app'     → main file explorer
 */
 export default function App() {
+  const isShareLink = window.location.pathname.startsWith('/s/');
   const [screen,       setScreen]      = useState('intro'); // always start with intro
   const [flashTarget,  setFlashTarget] = useState(null);    // where to go after flash
   const [drives,        setDrives]     = useState([]);
@@ -27,7 +30,9 @@ export default function App() {
   const [files,        setFiles]       = useState([]);
   const [selectedFile, setSelectedFile]= useState(null);
   const [showUpload,   setShowUpload]  = useState(false);
+  const [showNewFolder,setShowNewFolder] = useState(false);
   const [showSettings, setShowSettings]= useState(false);
+  const [isSidebarOpen, setIsSidebarOpen]= useState(false);
 
   /* Flash helper — show quick D then go somewhere */
   const flashTo = useCallback((target) => {
@@ -53,8 +58,12 @@ export default function App() {
   }, [activeDriveId, currentPath, search]);
 
   useEffect(() => {
-    if (screen === 'app') { loadDrives(); }
-  }, [screen]);
+    if (screen === 'app') { 
+      loadDrives();
+      const interval = setInterval(loadDrives, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [screen, loadDrives]);
 
   useEffect(() => {
     if (screen === 'app') { loadFiles(); }
@@ -74,14 +83,15 @@ export default function App() {
     flashTo('app');
   };
 
-  /* ── Full intro → login ── */
+  /* ── Full intro → next screen ── */
   if (screen === 'intro') {
     return (
       <IntroAnimation
-        fast={false}
-        onDone={() =>
-          setScreen(StorageService.isLoggedIn() ? 'app' : 'login')
-        }
+        fast={isShareLink}
+        onDone={() => {
+          if (isShareLink) setScreen('share');
+          else setScreen(StorageService.isLoggedIn() ? 'app' : 'login');
+        }}
       />
     );
   }
@@ -98,7 +108,26 @@ export default function App() {
 
   /* ── Login ── */
   if (screen === 'login') {
-    return <LoginPage onSuccess={handleLoginSuccess} />;
+    return (
+      <>
+        <LoginPage 
+          onSuccess={handleLoginSuccess} 
+          onOpenSettings={() => setShowSettings(true)} 
+        />
+        {showSettings && (
+          <SettingsModal
+            onClose={() => setShowSettings(false)}
+            onSave={() => {}}
+          />
+        )}
+      </>
+    );
+  }
+
+  /* ── Public Share Page ── */
+  if (screen === 'share') {
+    const token = window.location.pathname.split('/s/')[1];
+    return <SharePage token={token} onGoHome={() => { window.history.pushState({}, '', '/'); setScreen('login'); }} />;
   }
 
   /* ── Main App ── */
@@ -106,19 +135,34 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {/* Mobile Sidebar Overlay */}
+      {isSidebarOpen && (
+        <div className="sidebar-overlay" onClick={() => setIsSidebarOpen(false)} />
+      )}
+
       <Sidebar
         drives={drives}
         activeDriveId={activeDriveId}
-        setActiveDriveId={(id) => { setActiveDriveId(id); setCurrentPath('/'); }}
+        setActiveDriveId={(id) => { 
+          setActiveDriveId(id); 
+          setCurrentPath('/'); 
+          setIsSidebarOpen(false); // Auto-close on mobile
+        }}
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab) => {
+          setActiveTab(tab);
+          setIsSidebarOpen(false);
+        }}
+        isOpen={isSidebarOpen}
       />
 
       <main className="main-content">
         <TopBar
           search={search}
           setSearch={setSearch}
+          onMenuToggle={() => setIsSidebarOpen(!isSidebarOpen)}
           onUpload={() => setShowUpload(true)}
+          onNewFolder={() => setShowNewFolder(true)}
           onSettings={() => setShowSettings(true)}
           onLogout={handleLogout}
         />
@@ -146,6 +190,15 @@ export default function App() {
           currentPath={currentPath}
           onClose={() => setShowUpload(false)}
           onUploadComplete={loadFiles}
+        />
+      )}
+
+      {showNewFolder && (
+        <NewFolderModal
+          activeDriveId={activeDriveId}
+          currentPath={currentPath}
+          onClose={() => setShowNewFolder(false)}
+          onSuccess={loadFiles}
         />
       )}
 

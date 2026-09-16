@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import {
   Folder, FileText, Image as Img, Film, Archive,
-  Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen
+  Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen, Share2
 } from 'lucide-react';
+import { ShareModal } from './ShareModal';
 
 const TYPE_MAP = {
   folder:   { cls: 'folder',   Icon: Folder },
@@ -14,6 +15,7 @@ const TYPE_MAP = {
 
 export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, onSelectFile }) {
   const [view, setView] = useState('grid');
+  const [shareFile, setShareFile] = useState(null);
 
   const navigate = (file) => {
     if (file.type === 'folder') {
@@ -90,13 +92,23 @@ export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, 
                   <div className={`file-icon ${cls}`}>
                     <Icon size={22} />
                   </div>
-                  <button
-                    className="card-action btn-icon"
-                    style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
-                    onClick={(e) => { e.stopPropagation(); onSelectFile(file); }}
-                  >
-                    <Eye size={14} />
-                  </button>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      className="card-action btn-icon"
+                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
+                      onClick={(e) => { e.stopPropagation(); setShareFile(file); }}
+                      title="Share"
+                    >
+                      <Share2 size={14} />
+                    </button>
+                    <button
+                      className="card-action btn-icon"
+                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
+                      onClick={(e) => { e.stopPropagation(); onSelectFile(file); }}
+                    >
+                      <Eye size={14} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="card-bottom">
@@ -132,6 +144,13 @@ export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, 
                 <div className="list-meta">{file.size}</div>
                 <div className="list-actions" onClick={(e) => e.stopPropagation()}>
                   <button
+                    style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex', marginRight: 4 }}
+                    onClick={() => setShareFile(file)}
+                    title="Share"
+                  >
+                    <Share2 size={14} />
+                  </button>
+                  <button
                     style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
                     onClick={() => onSelectFile(file)}
                   >
@@ -142,6 +161,14 @@ export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, 
             );
           })}
         </div>
+      )}
+
+      {shareFile && (
+        <ShareModal
+          file={shareFile}
+          driveId={activeDrive.id}
+          onClose={() => setShareFile(null)}
+        />
       )}
     </div>
   );

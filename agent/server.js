@@ -3,6 +3,7 @@ const cors     = require('cors');
 const fs       = require('fs');
 const path     = require('path');
 const { execSync } = require('child_process');
+const crypto   = require('crypto');
 const multer   = require('multer');
 
 /* ─────────────────────────────────────────────
@@ -59,9 +60,10 @@ function recordFailure(ip, entry) {
 /* ─────────────────────────────────────────────
    MIDDLEWARE
    ───────────────────────────────────────────── */
+
 app.use(cors({
-  origin: [ALLOWED_ORIGIN, 'http://localhost:3000', 'http://localhost:5173'],
-  methods: ['GET', 'POST', 'DELETE'],
+  origin: [ALLOWED_ORIGIN, 'http://localhost:3000', 'http://localhost:3002', 'http://localhost:5173'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Authorization', 'Content-Type'],
   credentials: false,
 }));
@@ -71,11 +73,18 @@ app.use(express.json({ limit: '1mb' }));
    AUTH MIDDLEWARE
    ───────────────────────────────────────────── */
 function auth(req, res, next) {
+  let token;
   const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
+  if (header && header.startsWith('Bearer ')) {
+    token = header.slice(7);
+  } else if (req.query.token) {
+    token = req.query.token;
+  }
+
+  if (!token) {
     return res.status(401).json({ error: 'Authorization required' });
   }
-  const token = header.slice(7);
+
   if (token !== AUTH_PASSWORD) {
     recordFailure(req._ip || 'unknown', req._entry || { count: 0, blockUntil: 0 });
     return res.status(403).json({ error: 'Invalid password' });
@@ -89,13 +98,29 @@ function auth(req, res, next) {
    PATH TRAVERSAL GUARD
    ───────────────────────────────────────────── */
 function safePath(baseDir, userPath) {
-  const normalized = path.normalize(userPath || '/').replace(/^(\.\.\/|\/\/)+/, '');
-  const resolved = path.resolve(baseDir, normalized);
+  // Remove leading slashes so path.join doesn't treat it as absolute root
+  const cleanPath = (userPath || '/').replace(/^(\/|\\)+/, '').replace(/(\.\.\/|\.\.\\)/g, '');
+  const resolved = path.normalize(path.join(baseDir, cleanPath));
   if (!resolved.startsWith(path.resolve(baseDir))) {
     throw new Error('Path traversal attempt blocked');
   }
   return resolved;
 }
+
+/* ─────────────────────────────────────────────
+   SHARE LINKS DATABASE (shares.json)
+   ───────────────────────────────────────────── */
+const sharesFile = path.join(__dirname, 'shares.json');
+function loadShares() {
+  try { return JSON.parse(fs.readFileSync(sharesFile, 'utf8')); }
+  catch (e) { return {}; }
+}
+function saveShares(shares) {
+  fs.writeFileSync(sharesFile, JSON.stringify(shares, null, 2));
+}
+
+// In-memory temp tokens for one-time downloads after the main link is burned
+const tempTokens = new Map();
 
 /* ─────────────────────────────────────────────
    DYNAMIC DRIVE DISCOVERY
@@ -308,6 +333,217 @@ app.get('/api/download', rateLimitAuth, auth, (req, res) => {
 // POST /api/upload
 app.post('/api/upload', rateLimitAuth, auth, upload.array('file', 50), (req, res) => {
   res.json({ success: true, uploaded: req.files?.length || 0 });
+});
+
+// POST /api/mkdir
+app.post('/api/mkdir', rateLimitAuth, auth, (req, res) => {
+  const { driveId, path: parentPath, folderName } = req.body;
+  if (!folderName || folderName.includes('/')) return res.status(400).json({ error: 'Invalid folder name' });
+
+  const drives = getMountedDrives();
+  const drive = drives.find(d => d.id === driveId) || drives[0];
+  if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+  try {
+    const parentDir = safePath(drive.mount, parentPath || '/');
+    const newDir = path.join(parentDir, folderName);
+    
+    // Ensure the new directory is also within the mount
+    if (!newDir.startsWith(path.resolve(drive.mount))) {
+      return res.status(403).json({ error: 'Path traversal attempt blocked' });
+    }
+
+    if (fs.existsSync(newDir)) {
+      return res.status(400).json({ error: 'Folder already exists' });
+    }
+
+    fs.mkdirSync(newDir, { recursive: true });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/share
+app.post('/api/share', rateLimitAuth, auth, (req, res) => {
+  const { driveId, filePath, burnAfterReading } = req.body;
+  if (!driveId || !filePath) return res.status(400).json({ error: 'Missing driveId or filePath' });
+
+  const drives = getMountedDrives();
+  const drive = drives.find(d => d.id === driveId);
+  if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+  try {
+    const fullPath = safePath(drive.mount, filePath);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File not found' });
+    
+    const token = crypto.randomBytes(16).toString('hex');
+    const shares = loadShares();
+    shares[token] = {
+      driveId,
+      filePath,
+      burnAfterReading: !!burnAfterReading,
+      createdAt: new Date().toISOString()
+    };
+    saveShares(shares);
+    
+    res.json({ token, success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/share/:token
+app.put('/api/share/:token', rateLimitAuth, auth, (req, res) => {
+  const { burnAfterReading } = req.body;
+  const shares = loadShares();
+  if (!shares[req.params.token]) return res.status(404).json({ error: 'Share not found' });
+  
+  shares[req.params.token].burnAfterReading = !!burnAfterReading;
+  saveShares(shares);
+  res.json({ success: true });
+});
+
+// GET /api/s/:token (Public - Get Share Metadata)
+app.get('/api/s/:token', (req, res) => {
+  const shares = loadShares();
+  const token = req.params.token;
+  let share = shares[token];
+  
+  // If not found in shares, check if it was recently burned and is in temp session
+  let isFromTemp = false;
+  if (!share) {
+    if (tempTokens.has(token)) {
+      const temp = tempTokens.get(token);
+      if (Date.now() > temp.expires) {
+        tempTokens.delete(token);
+        return res.status(404).json({ error: 'Share session expired.' });
+      }
+      share = temp.shareData;
+      isFromTemp = true;
+    } else {
+      return res.status(404).json({ error: 'Share link invalid, expired, or already burned.' });
+    }
+  }
+
+  const drives = getMountedDrives();
+  const drive = drives.find(d => d.id === share.driveId);
+  if (!drive) return res.status(404).json({ error: 'Drive offline' });
+
+  try {
+    const fullPath = safePath(drive.mount, share.filePath);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File no longer exists' });
+    
+    const stat = fs.statSync(fullPath);
+    const isDir = stat.isDirectory();
+    const type = getFileType(path.basename(fullPath), isDir);
+
+    let downloadToken = isFromTemp ? tempTokens.get(token).downloadToken : token;
+    
+    // BURN ON VIEW LOGIC: If it's a one-time link and hasn't been burned yet, burn it NOW.
+    if (share.burnAfterReading && !isFromTemp) {
+      delete shares[token];
+      saveShares(shares);
+      downloadToken = crypto.randomBytes(16).toString('hex');
+      
+      // Store original token for 500 MILLISECONDS ONLY (Fixes React Strict Mode double-fetch but kills refresh)
+      tempTokens.set(token, { 
+        shareData: share, 
+        fullPath, 
+        downloadToken,
+        expires: Date.now() + 500 
+      }); 
+      
+      // Store actual download token
+      tempTokens.set(downloadToken, { 
+        fullPath, 
+        expires: Date.now() + 1000 * 60 * 60,
+        hasDownloaded: false
+      }); 
+    }
+
+    res.json({
+      name: path.basename(fullPath),
+      type,
+      size: isDir ? 'Folder' : formatSize(stat.size),
+      isDir,
+      burnAfterReading: share.burnAfterReading,
+      downloadToken
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Helper for sending files
+function streamFile(fullPath, req, res) {
+  const stat = fs.statSync(fullPath);
+  if (stat.isDirectory()) return res.status(400).json({ error: 'Cannot download a folder directly' });
+  const fileSize = stat.size;
+  const range = req.headers.range;
+  const mime = getMime(fullPath);
+
+  if (range) {
+    const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(startStr, 10);
+    const end = endStr ? parseInt(endStr, 10) : Math.min(start + 10 * 1024 * 1024, fileSize - 1);
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+      'Content-Type': mime,
+    });
+    fs.createReadStream(fullPath, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': fileSize,
+      'Content-Type': mime,
+      'Content-Disposition': req.query.inline ? 'inline' : `attachment; filename="${encodeURIComponent(path.basename(fullPath))}"`,
+      'Accept-Ranges': 'bytes',
+    });
+    fs.createReadStream(fullPath).pipe(res);
+  }
+}
+
+// GET /api/s/:token/download (Public - Download/Stream file)
+app.get('/api/s/:token/download', (req, res) => {
+  const token = req.params.token;
+  
+  // Check temp tokens (burned shares)
+  if (tempTokens.has(token)) {
+    const temp = tempTokens.get(token);
+    if (Date.now() > temp.expires) {
+      tempTokens.delete(token);
+      return res.status(404).json({ error: 'Session expired.' });
+    }
+    
+    // Prevent multiple downloads
+    if (!req.query.inline) {
+      if (temp.hasDownloaded && !req.headers.range) {
+        return res.status(403).json({ error: 'This file has already been downloaded and is now burned.' });
+      }
+      temp.hasDownloaded = true;
+    }
+
+    return streamFile(temp.fullPath, req, res);
+  }
+
+  // Check permanent shares
+  const shares = loadShares();
+  const share = shares[token];
+  if (!share) return res.status(404).json({ error: 'Share link invalid or expired.' });
+
+  const drives = getMountedDrives();
+  const drive = drives.find(d => d.id === share.driveId);
+  if (!drive) return res.status(404).json({ error: 'Drive offline' });
+
+  try {
+    const fullPath = safePath(drive.mount, share.filePath);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File no longer exists' });
+    streamFile(fullPath, req, res);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 function getMime(filePath) {

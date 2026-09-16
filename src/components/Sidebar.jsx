@@ -1,9 +1,9 @@
 import React from 'react';
 import { HardDrive, Cpu, Folder, Clock, Star, ShieldCheck, Wifi, PlugZap } from 'lucide-react';
 
-export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, setActiveTab }) {
+export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, setActiveTab, isOpen }) {
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}>
       <div>
         {/* Brand */}
         <div className="brand">

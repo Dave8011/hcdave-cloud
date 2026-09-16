@@ -71,9 +71,9 @@ export class StorageService {
   static uploadFile(driveId, file, path = '/', onProgress) {
     return new Promise((resolve, reject) => {
       const form = new FormData();
-      form.append('file', file);
       form.append('driveId', driveId);
       form.append('path', path);
+      form.append('file', file); // file must be last for multer diskStorage
 
       const xhr = new XMLHttpRequest();
 
@@ -99,9 +99,58 @@ export class StorageService {
     });
   }
 
-  // Build a secure download URL (token in Authorization header via fetch + blob)
+  // POST /api/mkdir
+  static async createFolder(driveId, path, folderName) {
+    const r = await fetch(`${this.getAgentUrl()}/api/mkdir`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, path, folderName })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to create folder');
+    return data;
+  }
+
+  // POST /api/share
+  static async createShareLink(driveId, filePath, burnAfterReading) {
+    const r = await fetch(`${this.getAgentUrl()}/api/share`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, filePath, burnAfterReading })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to create share link');
+    return data;
+  }
+
+  // PUT /api/share/:token
+  static async updateShareLink(token, burnAfterReading) {
+    const r = await fetch(`${this.getAgentUrl()}/api/share/${token}`, {
+      method: 'PUT',
+      headers: this.headers(),
+      body: JSON.stringify({ burnAfterReading })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to update share link');
+    return data;
+  }
+
+  // GET /api/s/:token
+  static async getShareMetadata(token) {
+    const r = await fetch(`${this.getAgentUrl()}/api/s/${token}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Share link invalid');
+    return data;
+  }
+
+  // Build a secure download URL
   static getDownloadUrl(driveId, filePath) {
     return `${this.getAgentUrl()}/api/download?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}`;
+  }
+
+  // Build a stream URL with the token embedded for <img> and <video> tags
+  static getStreamUrl(driveId, filePath) {
+    return `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getToken())}`;
   }
 
   // Trigger browser download securely via fetch + blob URL

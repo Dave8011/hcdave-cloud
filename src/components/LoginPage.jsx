@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, ShieldCheck, AlertCircle, WifiOff } from 'lucide-react';
 
-export function LoginPage({ onSuccess }) {
+export function LoginPage({ onSuccess, onOpenSettings }) {
   const [password, setPassword] = useState('');
   const [showPwd,  setShowPwd]  = useState(false);
   const [error,    setError]    = useState('');
@@ -128,7 +128,15 @@ export function LoginPage({ onSuccess }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, marginBottom: 4 }}>
               <WifiOff size={13} /> Agent offline?
             </div>
-            Go to <strong>Config</strong> (after login with correct URL) or check that your TV Box is powered on and the tunnel is running.
+            If you are running the agent locally, click here to{' '}
+            <button 
+              type="button" 
+              onClick={onOpenSettings} 
+              style={{ background: 'none', border: 'none', color: 'var(--amber)', textDecoration: 'underline', cursor: 'pointer', padding: 0, font: 'inherit', fontWeight: 600 }}
+            >
+              open Config
+            </button> 
+            {' '}and change the URL to http://localhost:3001.
           </div>
         )}
 

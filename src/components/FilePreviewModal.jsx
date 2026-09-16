@@ -30,7 +30,9 @@ export function FilePreviewModal({ file, driveId, onClose }) {
     }
   };
 
-  const streamUrl = file.streamUrl || null;
+  const streamUrl = (file.type === 'image' || file.type === 'video')
+    ? StorageService.getStreamUrl(driveId, file.path || file.name)
+    : null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
