@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Lock, Eye, EyeOff, ShieldCheck, AlertCircle, WifiOff } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Lock, Eye, EyeOff, ShieldCheck, AlertCircle, WifiOff, Server } from 'lucide-react';
+import { StorageService } from '../services/api';
 
 export function LoginPage({ onSuccess, onOpenSettings }) {
   const [password, setPassword] = useState('');
@@ -7,6 +8,15 @@ export function LoginPage({ onSuccess, onOpenSettings }) {
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
   const [shake,    setShake]    = useState(false);
+  const [version,  setVersion]  = useState('');
+
+  useEffect(() => {
+    StorageService.getHealth().then(data => {
+      if (data && data.version) {
+        setVersion(data.version);
+      }
+    });
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -144,6 +154,12 @@ export function LoginPage({ onSuccess, onOpenSettings }) {
           <ShieldCheck size={14} color="var(--emerald)" />
           <span>Password verified against your home agent</span>
         </div>
+        
+        {version && (
+          <div style={{ textAlign: 'center', marginTop: 12, fontSize: '0.7rem', color: 'var(--text-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+            <Server size={11} /> Agent Version v{version}
+          </div>
+        )}
       </div>
     </div>
   );
