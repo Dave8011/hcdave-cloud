@@ -24,6 +24,7 @@ if (fs.existsSync(envPath)) {
     });
 }
 
+const VERSION       = '1.1.0';
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -227,7 +228,7 @@ const upload = multer({ storage: multerStorage, limits: { fileSize: 50 * 1024 * 
    ───────────────────────────────────────────── */
 
 // Health check (public)
-app.get('/health', (_, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+app.get('/health', (_, res) => res.json({ status: 'ok', version: VERSION, time: new Date().toISOString() }));
 
 // GET /api/drives
 app.get('/api/drives', rateLimitAuth, auth, (_, res) => {
@@ -402,6 +403,31 @@ app.put('/api/share/:token', rateLimitAuth, auth, (req, res) => {
   shares[req.params.token].burnAfterReading = !!burnAfterReading;
   saveShares(shares);
   res.json({ success: true });
+});
+
+// POST /api/update (Update Agent Software via Git)
+app.post('/api/update', rateLimitAuth, auth, (req, res) => {
+  try {
+    // 1. Send success response first so the frontend knows it started
+    res.json({ success: true, message: 'Update started. Agent will restart in a few seconds.' });
+    
+    // 2. Perform the git pull and restart after a small delay
+    setTimeout(() => {
+      try {
+        console.log('🔄 Executing update...');
+        // We go up one directory since server.js is inside agent/
+        const projectRoot = path.join(__dirname, '..');
+        execSync('git reset --hard HEAD && git pull', { cwd: projectRoot, stdio: 'ignore' });
+        
+        console.log('🔄 Restarting service...');
+        execSync('systemctl restart hcdave-agent', { stdio: 'ignore' });
+      } catch (e) {
+        console.error('Update failed:', e);
+      }
+    }, 2000);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // GET /api/s/:token (Public - Get Share Metadata)

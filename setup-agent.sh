@@ -25,9 +25,16 @@ echo -e "${BOLD}╚════════════════════�
 # ── 1. Root check
 [[ "$EUID" -ne 0 ]] && fail "Please run as root: sudo bash setup-agent.sh"
 
-# ── 2. OS check
+# ── 2. OS check & core utilities
 if ! command -v apt-get &>/dev/null && ! command -v pacman &>/dev/null && ! command -v yum &>/dev/null; then
   fail "Unsupported package manager. Use Debian/Ubuntu/Arch/CentOS."
+fi
+
+if ! command -v curl &>/dev/null; then
+  header "Installing curl (required for setup)"
+  if command -v apt-get &>/dev/null; then apt-get update -y && apt-get install -y curl; fi
+  if command -v pacman &>/dev/null; then pacman -Sy --noconfirm curl; fi
+  if command -v yum &>/dev/null; then yum install -y curl; fi
 fi
 
 # ── 3. Install Node.js
@@ -89,7 +96,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=$(which node) $INSTALL_DIR/server.js
+ExecStart=$(command -v node) $INSTALL_DIR/server.js
 WorkingDirectory=$INSTALL_DIR
 Restart=always
 RestartSec=5

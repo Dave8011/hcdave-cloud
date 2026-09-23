@@ -25,6 +25,13 @@ echo -e "${BOLD}╚════════════════════�
 
 [[ "$EUID" -ne 0 ]] && fail "Please run as root: sudo bash setup-cloudflare-tunnel.sh"
 
+if ! command -v curl &>/dev/null; then
+  header "Installing curl (required for setup)"
+  if command -v apt-get &>/dev/null; then apt-get update -y && apt-get install -y curl; fi
+  if command -v pacman &>/dev/null; then pacman -Sy --noconfirm curl; fi
+  if command -v yum &>/dev/null; then yum install -y curl; fi
+fi
+
 # ── 1. Install cloudflared
 header "Installing cloudflared"
 ARCH=$(uname -m)

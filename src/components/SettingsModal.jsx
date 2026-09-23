@@ -1,10 +1,19 @@
-import React, { useState } from 'react';
-import { X, Globe, Check, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Globe, Check, ShieldCheck, RefreshCw } from 'lucide-react';
 import { StorageService } from '../services/api';
 
 export function SettingsModal({ onClose, onSave }) {
   const [agentUrl, setAgentUrl] = useState(StorageService.getAgentUrl());
   const [saved, setSaved] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState('');
+  const [agentVersion, setAgentVersion] = useState('Checking...');
+
+  useEffect(() => {
+    StorageService.getHealth().then(data => {
+      setAgentVersion(data.version || 'unknown');
+    });
+  }, []);
 
   const handleSave = () => {
     StorageService.setAgentUrl(agentUrl);
@@ -13,6 +22,20 @@ export function SettingsModal({ onClose, onSave }) {
       onSave();
       onClose();
     }, 800);
+  };
+
+  const handleUpdate = async () => {
+    if (!window.confirm('This will update the backend server on the Dell to the latest GitHub code and restart it. Continue?')) return;
+    try {
+      setIsUpdating(true);
+      setUpdateMsg('Sending update command...');
+      const res = await StorageService.updateAgent();
+      setUpdateMsg(res.message || 'Update started successfully!');
+    } catch (e) {
+      setUpdateMsg(e.message || 'Update failed');
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
   return (
@@ -53,6 +76,35 @@ export function SettingsModal({ onClose, onSave }) {
           <div style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: 1.7 }}>
             Any USB HDD, SSD, or Flash Drive plugged into your TV Box / router is automatically detected and served without any extra configuration.
           </div>
+        </div>
+
+        <div style={{ padding: '14px', background: 'var(--bg-2)', borderRadius: 'var(--r-sm)', marginBottom: 22 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: '0.85rem' }}>
+              <RefreshCw size={15} color="var(--text-1)" />
+              <span>Server Updates</span>
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>
+              Current Version: <strong style={{ color: 'var(--cyan)' }}>v{agentVersion}</strong>
+            </div>
+          </div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: 1.7, marginBottom: 12 }}>
+            Automatically pull the latest code from GitHub to your Dell server and restart the background agent without needing a monitor.
+          </div>
+          <button 
+            className="btn" 
+            style={{ width: '100%', background: 'rgba(255,255,255,0.05)', color: 'var(--text-1)', border: '1px solid rgba(255,255,255,0.1)' }}
+            onClick={handleUpdate}
+            disabled={isUpdating}
+          >
+            {isUpdating ? <RefreshCw size={14} className="spin" /> : <RefreshCw size={14} />}
+            <span>{isUpdating ? 'Updating...' : 'Update Agent Software'}</span>
+          </button>
+          {updateMsg && (
+            <div style={{ fontSize: '0.75rem', marginTop: 10, color: updateMsg.includes('failed') ? 'var(--red)' : 'var(--emerald)' }}>
+              {updateMsg}
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>

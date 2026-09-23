@@ -33,6 +33,15 @@ export class StorageService {
     };
   }
 
+  static async getHealth() {
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/health`);
+      return await r.json();
+    } catch {
+      return { status: 'offline', version: 'unknown' };
+    }
+  }
+
   // GET /api/drives — list all detected plug & play drives
   static async getDrives() {
     try {
@@ -132,6 +141,17 @@ export class StorageService {
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed to update share link');
+    return data;
+  }
+
+  // POST /api/update
+  static async updateAgent() {
+    const r = await fetch(`${this.getAgentUrl()}/api/update`, {
+      method: 'POST',
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to update agent');
     return data;
   }
 
