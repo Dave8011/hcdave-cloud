@@ -24,7 +24,12 @@ if (fs.existsSync(envPath)) {
     });
 }
 
-const VERSION       = '1.1.0';
+let GIT_HASH = '';
+try {
+  GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
+} catch (e) {}
+
+const VERSION       = `1.1.0${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
