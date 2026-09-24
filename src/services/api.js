@@ -38,7 +38,7 @@ export class StorageService {
       const r = await fetch(`${this.getAgentUrl()}/health`);
       return await r.json();
     } catch {
-      return { status: 'offline', version: 'unknown' };
+      return { status: 'offline', version: 'unknown', localIp: 'Unknown' };
     }
   }
 

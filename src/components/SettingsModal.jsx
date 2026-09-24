@@ -8,10 +8,12 @@ export function SettingsModal({ onClose, onSave }) {
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateMsg, setUpdateMsg] = useState('');
   const [agentVersion, setAgentVersion] = useState('Checking...');
+  const [localIp, setLocalIp] = useState('');
 
   useEffect(() => {
     StorageService.getHealth().then(data => {
       setAgentVersion(data.version || 'unknown');
+      setLocalIp(data.localIp || 'Unknown');
     });
   }, []);
 
@@ -84,8 +86,11 @@ export function SettingsModal({ onClose, onSave }) {
               <RefreshCw size={15} color="var(--text-1)" />
               <span>Server Updates</span>
             </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>
-              Current Version: <strong style={{ color: 'var(--cyan)' }}>v{agentVersion}</strong>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', display: 'flex', gap: 12 }}>
+              {localIp && (
+                <span>SSH IP: <strong style={{ color: 'var(--cyan)' }}>{localIp}</strong></span>
+              )}
+              <span>Version: <strong style={{ color: 'var(--cyan)' }}>v{agentVersion}</strong></span>
             </div>
           </div>
           <div style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: 1.7, marginBottom: 12 }}>

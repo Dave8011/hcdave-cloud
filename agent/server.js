@@ -5,6 +5,19 @@ const path     = require('path');
 const { execSync } = require('child_process');
 const crypto   = require('crypto');
 const multer   = require('multer');
+const os       = require('os');
+
+function getLocalIp() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'Unknown';
+}
 
 /* ─────────────────────────────────────────────
    ENV LOADING (agent/.env)
@@ -233,7 +246,7 @@ const upload = multer({ storage: multerStorage, limits: { fileSize: 50 * 1024 * 
    ───────────────────────────────────────────── */
 
 // Health check (public)
-app.get('/health', (_, res) => res.json({ status: 'ok', version: VERSION, time: new Date().toISOString() }));
+app.get('/health', (_, res) => res.json({ status: 'ok', version: VERSION, localIp: getLocalIp(), time: new Date().toISOString() }));
 
 // GET /api/drives
 app.get('/api/drives', rateLimitAuth, auth, (_, res) => {
