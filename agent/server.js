@@ -144,7 +144,14 @@ const tempTokens = new Map();
 /* ─────────────────────────────────────────────
    DYNAMIC DRIVE DISCOVERY
    ───────────────────────────────────────────── */
+let cachedDrives = [];
+let lastDriveFetch = 0;
+
 function getMountedDrives() {
+  if (Date.now() - lastDriveFetch < 5000 && cachedDrives.length > 0) {
+    return cachedDrives;
+  }
+
   const drives = [];
   const searchDirs = ['/mnt', '/media'];
 
@@ -168,6 +175,8 @@ function getMountedDrives() {
     try { subs = fs.readdirSync(base); } catch (_) { continue; }
 
     for (const sub of subs) {
+      if (sub.toLowerCase().includes('cdrom')) continue; // Ignore cdroms
+
       const fullPath = path.join(base, sub);
       try {
         const stat = fs.statSync(fullPath);
@@ -197,6 +206,8 @@ function getMountedDrives() {
     }
   }
 
+  cachedDrives = drives;
+  lastDriveFetch = Date.now();
   return drives;
 }
 

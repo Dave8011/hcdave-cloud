@@ -64,9 +64,7 @@ export function FilePreviewModal({ file, driveId, onClose }) {
           )}
 
           {file.type === 'video' && streamUrl && (
-            <video controls autoPlay className="preview-video">
-              <source src={streamUrl} type="video/mp4" />
-            </video>
+            <video controls autoPlay className="preview-video" src={streamUrl}></video>
           )}
 
           {(file.type !== 'image' && file.type !== 'video') && (
