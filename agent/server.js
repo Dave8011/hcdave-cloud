@@ -246,7 +246,21 @@ const upload = multer({ storage: multerStorage, limits: { fileSize: 50 * 1024 * 
    ───────────────────────────────────────────── */
 
 // Health check (public)
-app.get('/health', (_, res) => res.json({ status: 'ok', version: VERSION, localIp: getLocalIp(), time: new Date().toISOString() }));
+app.get('/health', (_, res) => {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const memUsage = Math.round(((totalMem - freeMem) / totalMem) * 100);
+  const uptimeHours = (os.uptime() / 3600).toFixed(1);
+  const load = os.loadavg()[0].toFixed(2);
+
+  res.json({ 
+    status: 'ok', 
+    version: VERSION, 
+    localIp: getLocalIp(), 
+    stats: { memUsage, uptimeHours, load },
+    time: new Date().toISOString() 
+  });
+});
 
 // GET /api/drives
 app.get('/api/drives', rateLimitAuth, auth, (_, res) => {

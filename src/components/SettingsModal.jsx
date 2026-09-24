@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Globe, Check, ShieldCheck, RefreshCw } from 'lucide-react';
+import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock } from 'lucide-react';
 import { StorageService } from '../services/api';
 
 export function SettingsModal({ onClose, onSave }) {
@@ -9,11 +9,13 @@ export function SettingsModal({ onClose, onSave }) {
   const [updateMsg, setUpdateMsg] = useState('');
   const [agentVersion, setAgentVersion] = useState('Checking...');
   const [localIp, setLocalIp] = useState('');
+  const [stats, setStats] = useState(null);
 
   useEffect(() => {
     StorageService.getHealth().then(data => {
       setAgentVersion(data.version || 'unknown');
       setLocalIp(data.localIp || 'Unknown');
+      if (data.stats) setStats(data.stats);
     });
   }, []);
 
@@ -93,6 +95,15 @@ export function SettingsModal({ onClose, onSave }) {
               <span>Version: <strong style={{ color: 'var(--cyan)' }}>v{agentVersion}</strong></span>
             </div>
           </div>
+          
+          {stats && (
+            <div style={{ display: 'flex', gap: 15, fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: 12, padding: '10px', background: 'rgba(0,0,0,0.15)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><Activity size={12} /> CPU Load: <strong style={{color: 'var(--cyan)'}}>{stats.load}</strong></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><Cpu size={12} /> RAM: <strong style={{color: 'var(--cyan)'}}>{stats.memUsage}%</strong></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><Clock size={12} /> Uptime: <strong style={{color: 'var(--cyan)'}}>{stats.uptimeHours}h</strong></div>
+            </div>
+          )}
+
           <div style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: 1.7, marginBottom: 12 }}>
             Automatically pull the latest code from GitHub to your Dell server and restart the background agent without needing a monitor.
           </div>
