@@ -27,7 +27,7 @@ header "Step 2: Installing Cloudflare Tunnel..."
 bash setup-cloudflare-tunnel.sh
 
 header "Step 3: Plugging in Drives"
-echo -e "  ${YELLOW}${BOLD}Please plug in your SSD and HDD drives into the Dell now.${NC}"
+echo -e "  ${YELLOW}${BOLD}Please plug in your SSD and HDD drives into the server now.${NC}"
 echo -e "  Wait about 10 seconds for Linux to detect them..."
 echo -n "  Press [Enter] when you have plugged them in: "
 read -r
@@ -68,7 +68,7 @@ echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN}${BOLD}  ✅  SETUP 100% COMPLETE!                                 ${NC}"
 echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo -e "  ${BOLD}You can now disconnect the monitor and keyboard from the Dell!${NC}"
+echo -e "  ${BOLD}You can now disconnect the monitor and keyboard from the server!${NC}"
 echo -e "  It will run silently in the background forever."
 echo ""
 echo -e "  ${BOLD}Web Access (Anywhere in the world):${NC}"

@@ -18,7 +18,7 @@ drive.hcdavecloud.in  ←→  Cloudflare Tunnel  ←→  [TV Box / Mini PC]
 - **Agent** — Node.js server running on your TV Box / Mini PC at home
 - **Tunnel** — Cloudflare Tunnel (free) — **no static IP, no port forwarding required.**
 
-> 💡 **Network Independent:** Because the Cloudflare Tunnel initiates an *outbound* connection, it is completely plug-and-play. If you move houses, change your ISP, or buy a new WiFi router, you do **not** need to reconfigure anything. Just plug the Dell server into the new router, and it will instantly reconnect to `hcdavecloud.in`!
+> 💡 **Network Independent:** Because the Cloudflare Tunnel initiates an *outbound* connection, it is completely plug-and-play. If you move houses, change your ISP, or buy a new WiFi router, you do **not** need to reconfigure anything. Just plug the Home Server into the new router, and it will instantly reconnect to `hcdavecloud.in`!
 
 ---
 

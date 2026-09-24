@@ -29,7 +29,7 @@ export function SettingsModal({ onClose, onSave }) {
   };
 
   const handleUpdate = async () => {
-    if (!window.confirm('This will update the backend server on the Dell to the latest GitHub code and restart it. Continue?')) return;
+    if (!window.confirm('This will update the backend on your Home Server to the latest GitHub code and restart it. Continue?')) return;
     try {
       setIsUpdating(true);
       setUpdateMsg('Sending update command...');
@@ -105,7 +105,7 @@ export function SettingsModal({ onClose, onSave }) {
           )}
 
           <div style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: 1.7, marginBottom: 12 }}>
-            Automatically pull the latest code from GitHub to your Dell server and restart the background agent without needing a monitor.
+            Automatically pull the latest code from GitHub to your Home Server and restart the background agent without needing a monitor.
           </div>
           <button 
             className="btn" 
