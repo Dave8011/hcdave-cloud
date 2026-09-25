@@ -22,6 +22,8 @@ case $option in
     sudo git config --global --add safe.directory "*"
     sudo git reset --hard HEAD
     sudo git pull
+    echo -e "${CYAN}Deploying to server directory...${NC}"
+    sudo cp -r agent/* /opt/hcdave-agent/
     sudo systemctl restart hcdave-agent
     echo -e "${GREEN}Update Complete!${NC}"
     ;;

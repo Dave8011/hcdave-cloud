@@ -44,7 +44,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.1.1${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.1.2${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -268,7 +268,7 @@ app.get('/health', (_, res) => {
   const load = os.loadavg()[0].toFixed(2);
   let lastUpdated = 'Unknown';
   try {
-    lastUpdated = execSync('git log -1 --format="%cd" --date=short', { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).trim();
+    lastUpdated = execSync('git log -1 --format="%cd" --date=short', { cwd: '/home/root1/hcdave-cloud', encoding: 'utf8' }).trim();
   } catch (_) {}
 
   res.json({ 
@@ -467,10 +467,10 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
     setTimeout(() => {
       try {
         console.log('🔄 Executing update...');
-        // We go up one directory since server.js is inside agent/
-        const projectRoot = path.join(__dirname, '..');
+        const repoDir = '/home/root1/hcdave-cloud';
         execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
-        execSync('git reset --hard HEAD && git pull', { cwd: projectRoot, stdio: 'ignore' });
+        execSync('git reset --hard HEAD && git pull', { cwd: repoDir, stdio: 'ignore' });
+        execSync('cp -r agent/* /opt/hcdave-agent/', { cwd: repoDir, stdio: 'ignore' });
         
         console.log('🔄 Restarting service...');
         execSync('systemctl restart hcdave-agent', { stdio: 'ignore' });
