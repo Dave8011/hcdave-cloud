@@ -44,7 +44,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.1.3${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.1.4${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -302,27 +302,37 @@ app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
   if (!fs.existsSync(targetDir)) return res.json([]);
 
   try {
-    const items = await fs.promises.readdir(targetDir);
+    const dirents = await fs.promises.readdir(targetDir, { withFileTypes: true });
+    const skipStat = dirents.length > 200; // Smart load threshold to prevent HDD thrashing
     const result = [];
 
     // Process in batches of 50 to prevent blocking the event loop or hitting EMFILE
     const BATCH_SIZE = 50;
-    for (let i = 0; i < items.length; i += BATCH_SIZE) {
-      const batch = items.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(batch.map(async (name, index) => {
+    for (let i = 0; i < dirents.length; i += BATCH_SIZE) {
+      const batch = dirents.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(async (dirent, index) => {
         try {
-          const full = path.join(targetDir, name);
-          const st   = await fs.promises.stat(full);
-          const isDir = st.isDirectory();
+          const name = dirent.name;
+          const isDir = dirent.isDirectory();
           const type  = getFileType(name, isDir);
           const relPath = path.join(req.query.path || '/', name);
+          
+          let size = isDir ? 'Folder' : 'Unknown';
+          let modified = '';
+
+          if (!isDir && !skipStat) {
+             const full = path.join(targetDir, name);
+             const st = await fs.promises.stat(full);
+             size = formatSize(st.size);
+             modified = st.mtime.toISOString().split('T')[0];
+          }
 
           return {
             id:       `${i + index}-${name}`,
             name,
             type,
-            size:     isDir ? 'Folder' : formatSize(st.size),
-            modified: st.mtime.toISOString().split('T')[0],
+            size,
+            modified,
             path:     relPath,
             streamUrl: null,
           };
@@ -330,7 +340,9 @@ app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
       }));
       result.push(...batchResults.filter(Boolean));
       // Yield to the event loop between batches so video streams can progress
-      await new Promise(resolve => setImmediate(resolve));
+      if (!skipStat) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
     }
 
     result.sort((a, b) => {
@@ -369,7 +381,7 @@ app.get('/api/download', rateLimitAuth, auth, (req, res) => {
     // Partial content (video streaming)
     const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
     const start = parseInt(startStr, 10);
-    const end   = endStr ? parseInt(endStr, 10) : Math.min(start + 10 * 1024 * 1024, fileSize - 1);
+    const end   = endStr ? parseInt(endStr, 10) : fileSize - 1;
     res.writeHead(206, {
       'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges':  'bytes',
