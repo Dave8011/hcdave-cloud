@@ -44,7 +44,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.1.2${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.1.3${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -288,7 +288,7 @@ app.get('/api/drives', rateLimitAuth, auth, (_, res) => {
 });
 
 // GET /api/files
-app.get('/api/files', rateLimitAuth, auth, (req, res) => {
+app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
   const drives     = getMountedDrives();
   const driveId    = req.query.driveId;
   const drive      = drives.find(d => d.id === driveId) || drives[0];
@@ -302,36 +302,42 @@ app.get('/api/files', rateLimitAuth, auth, (req, res) => {
   if (!fs.existsSync(targetDir)) return res.json([]);
 
   try {
-    const items = fs.readdirSync(targetDir);
-    const result = items
-      .map((name, i) => {
+    const items = await fs.promises.readdir(targetDir);
+    const result = [];
+
+    // Process in batches of 50 to prevent blocking the event loop or hitting EMFILE
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < items.length; i += BATCH_SIZE) {
+      const batch = items.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(async (name, index) => {
         try {
           const full = path.join(targetDir, name);
-          const st   = fs.statSync(full);
+          const st   = await fs.promises.stat(full);
           const isDir = st.isDirectory();
           const type  = getFileType(name, isDir);
           const relPath = path.join(req.query.path || '/', name);
 
           return {
-            id:       `${i}-${name}`,
+            id:       `${i + index}-${name}`,
             name,
             type,
             size:     isDir ? 'Folder' : formatSize(st.size),
             modified: st.mtime.toISOString().split('T')[0],
             path:     relPath,
-            // streamUrl included for media – auth via header required
-            streamUrl: (type === 'image' || type === 'video')
-              ? null // client fetches with auth header
-              : null,
+            streamUrl: null,
           };
         } catch (_) { return null; }
-      })
-      .filter(Boolean)
-      .sort((a, b) => {
-        if (a.type === 'folder' && b.type !== 'folder') return -1;
-        if (a.type !== 'folder' && b.type === 'folder') return 1;
-        return a.name.localeCompare(b.name);
-      });
+      }));
+      result.push(...batchResults.filter(Boolean));
+      // Yield to the event loop between batches so video streams can progress
+      await new Promise(resolve => setImmediate(resolve));
+    }
+
+    result.sort((a, b) => {
+      if (a.type === 'folder' && b.type !== 'folder') return -1;
+      if (a.type !== 'folder' && b.type === 'folder') return 1;
+      return a.name.localeCompare(b.name);
+    });
 
     res.json(result);
   } catch (e) {
