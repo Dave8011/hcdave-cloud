@@ -28,6 +28,7 @@ export default function App() {
   const [currentPath,  setCurrentPath] = useState('/');
   const [search,       setSearch]      = useState('');
   const [files,        setFiles]       = useState([]);
+  const [isLoading,    setIsLoading]   = useState(false);
   const [selectedFile, setSelectedFile]= useState(null);
   const [showUpload,   setShowUpload]  = useState(false);
   const [showNewFolder,setShowNewFolder] = useState(false);
@@ -49,12 +50,18 @@ export default function App() {
 
   const loadFiles = useCallback(async () => {
     if (!activeDriveId) return;
-    const all = await StorageService.listFiles(activeDriveId, currentPath);
-    setFiles(
-      search.trim()
-        ? all.filter(f => f.name.toLowerCase().includes(search.toLowerCase()))
-        : all
-    );
+    setIsLoading(true);
+    setFiles([]); // Clear files immediately to prevent double-clicks
+    try {
+      const all = await StorageService.listFiles(activeDriveId, currentPath);
+      setFiles(
+        search.trim()
+          ? all.filter(f => f.name.toLowerCase().includes(search.toLowerCase()))
+          : all
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }, [activeDriveId, currentPath, search]);
 
   useEffect(() => {
@@ -169,6 +176,7 @@ export default function App() {
 
         <FileExplorer
           files={files}
+          isLoading={isLoading}
           activeDrive={activeDrive}
           currentPath={currentPath}
           setCurrentPath={(p) => { setCurrentPath(p); setSearch(''); }}

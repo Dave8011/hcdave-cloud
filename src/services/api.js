@@ -170,7 +170,7 @@ export class StorageService {
 
   // Build a stream URL with the token embedded for <img> and <video> tags
   static getStreamUrl(driveId, filePath) {
-    return `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getToken())}`;
+    return `${this.getDownloadUrl(driveId, filePath)}&inline=true&token=${encodeURIComponent(this.getToken())}`;
   }
 
   // Trigger browser download securely via fetch + blob URL

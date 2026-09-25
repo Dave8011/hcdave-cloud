@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Folder, FileText, Image as Img, Film, Archive,
-  Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen, Share2
+  Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen, Share2, RefreshCw
 } from 'lucide-react';
 import { ShareModal } from './ShareModal';
 
@@ -13,7 +13,7 @@ const TYPE_MAP = {
   document: { cls: 'document', Icon: FileText },
 };
 
-export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, onSelectFile }) {
+export function FileExplorer({ files, isLoading, activeDrive, currentPath, setCurrentPath, onSelectFile }) {
   const [view, setView] = useState('grid');
   const [shareFile, setShareFile] = useState(null);
 
@@ -66,8 +66,18 @@ export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, 
         </div>
       </div>
 
+      {/* Loading state */}
+      {isLoading && (
+        <div className="empty-state">
+          <div className="empty-icon" style={{ animation: 'spin 1s linear infinite' }}>
+            <RefreshCw size={36} color="var(--cyan)" />
+          </div>
+          <div className="empty-title">Loading...</div>
+        </div>
+      )}
+
       {/* Empty state */}
-      {files.length === 0 && (
+      {!isLoading && files.length === 0 && (
         <div className="empty-state">
           <div className="empty-icon">
             <FolderOpen size={36} />
@@ -82,7 +92,7 @@ export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, 
       )}
 
       {/* Grid View */}
-      {files.length > 0 && view === 'grid' && (
+      {!isLoading && files.length > 0 && view === 'grid' && (
         <div className="file-grid">
           {files.map((file) => {
             const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;
@@ -125,7 +135,7 @@ export function FileExplorer({ files, activeDrive, currentPath, setCurrentPath, 
       )}
 
       {/* List View */}
-      {files.length > 0 && view === 'list' && (
+      {!isLoading && files.length > 0 && view === 'list' && (
         <div className="file-list">
           {files.map((file, i) => {
             const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;

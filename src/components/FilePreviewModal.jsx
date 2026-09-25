@@ -64,7 +64,14 @@ export function FilePreviewModal({ file, driveId, onClose }) {
           )}
 
           {file.type === 'video' && streamUrl && (
-            <video controls autoPlay className="preview-video" src={streamUrl}></video>
+            <>
+              <video controls autoPlay className="preview-video">
+                <source src={streamUrl} />
+              </video>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', textAlign: 'center', marginTop: 8 }}>
+                (If video plays but has no sound, the audio codec may not be supported by your web browser)
+              </div>
+            </>
           )}
 
           {(file.type !== 'image' && file.type !== 'video') && (

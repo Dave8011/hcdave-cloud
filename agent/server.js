@@ -2,7 +2,9 @@ const express  = require('express');
 const cors     = require('cors');
 const fs       = require('fs');
 const path     = require('path');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
+const util     = require('util');
+const execAsync = util.promisify(exec);
 const crypto   = require('crypto');
 const multer   = require('multer');
 const os       = require('os');
@@ -145,13 +147,8 @@ const tempTokens = new Map();
    DYNAMIC DRIVE DISCOVERY
    ───────────────────────────────────────────── */
 let cachedDrives = [];
-let lastDriveFetch = 0;
 
-function getMountedDrives() {
-  if (Date.now() - lastDriveFetch < 5000 && cachedDrives.length > 0) {
-    return cachedDrives;
-  }
-
+async function updateDrives() {
   const drives = [];
   const searchDirs = ['/mnt', '/media'];
 
@@ -168,15 +165,14 @@ function getMountedDrives() {
     }
   } catch (_) {}
 
-  let idx = 1;
   for (const base of searchDirs) {
     if (!fs.existsSync(base)) continue;
     let subs;
     try { subs = fs.readdirSync(base); } catch (_) { continue; }
 
     for (const sub of subs) {
-      if (sub.toLowerCase().includes('cdrom')) continue; // Ignore cdroms
-
+      if (sub.toLowerCase() === 'cdrom') continue; // Skip cdrom
+      
       const fullPath = path.join(base, sub);
       try {
         const stat = fs.statSync(fullPath);
@@ -184,7 +180,8 @@ function getMountedDrives() {
 
         let totalGB = 0, usedGB = 0, freeGB = 0;
         try {
-          const df = execSync(`df -B1G "${fullPath}" --output=size,used,avail 2>/dev/null | tail -n 1`, { encoding: 'utf8', timeout: 3000 }).trim().split(/\s+/);
+          const { stdout } = await execAsync(`df -B1G "${fullPath}" --output=size,used,avail 2>/dev/null | tail -n 1`, { timeout: 3000 });
+          const df = stdout.trim().split(/\s+/);
           totalGB = parseInt(df[0]) || 0;
           usedGB  = parseInt(df[1]) || 0;
           freeGB  = parseInt(df[2]) || 0;
@@ -193,7 +190,7 @@ function getMountedDrives() {
         if (totalGB === 0) continue; // skip empty/unresolved mounts
 
         drives.push({
-          id:      `drive-${idx++}`,
+          id:      `drive-${encodeURIComponent(sub)}`,
           name:    sub.replace(/[_-]+/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
           mount:   fullPath,
           type:    sub.toLowerCase().includes('ssd') || sub.toLowerCase().includes('nvme') ? 'SSD' : 'HDD',
@@ -207,8 +204,14 @@ function getMountedDrives() {
   }
 
   cachedDrives = drives;
-  lastDriveFetch = Date.now();
-  return drives;
+}
+
+// Start drive polling immediately
+updateDrives();
+setInterval(updateDrives, 10000);
+
+function getMountedDrives() {
+  return cachedDrives;
 }
 
 /* ─────────────────────────────────────────────
@@ -364,10 +367,11 @@ app.get('/api/download', rateLimitAuth, auth, (req, res) => {
     });
     fs.createReadStream(filePath, { start, end }).pipe(res);
   } else {
+    const disposition = req.query.inline === 'true' ? 'inline' : 'attachment';
     res.writeHead(200, {
       'Content-Length':      fileSize,
       'Content-Type':        mime,
-      'Content-Disposition': `attachment; filename="${encodeURIComponent(path.basename(filePath))}"`,
+      'Content-Disposition': `${disposition}; filename="${encodeURIComponent(path.basename(filePath))}"`,
       'Accept-Ranges':       'bytes',
     });
     fs.createReadStream(filePath).pipe(res);
