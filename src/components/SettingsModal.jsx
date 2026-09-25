@@ -9,12 +9,14 @@ export function SettingsModal({ onClose, onSave }) {
   const [updateMsg, setUpdateMsg] = useState('');
   const [agentVersion, setAgentVersion] = useState('Checking...');
   const [localIp, setLocalIp] = useState('');
+  const [lastUpdated, setLastUpdated] = useState('');
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
     StorageService.getHealth().then(data => {
       setAgentVersion(data.version || 'unknown');
       setLocalIp(data.localIp || 'Unknown');
+      setLastUpdated(data.lastUpdated || 'Unknown');
       if (data.stats) setStats(data.stats);
     });
   }, []);
@@ -34,10 +36,25 @@ export function SettingsModal({ onClose, onSave }) {
       setIsUpdating(true);
       setUpdateMsg('Sending update command...');
       const res = await StorageService.updateAgent();
-      setUpdateMsg(res.message || 'Update started successfully!');
+      setUpdateMsg(res.message || 'Update started. Waiting for server restart...');
+      
+      // Poll for version change
+      const poll = setInterval(async () => {
+        try {
+          const data = await StorageService.getHealth();
+          if (data && data.version && data.version !== agentVersion) {
+            clearInterval(poll);
+            setAgentVersion(data.version);
+            setLastUpdated(data.lastUpdated || 'Unknown');
+            setUpdateMsg('Update complete! Server is running new version.');
+            setIsUpdating(false);
+          }
+        } catch (e) {
+          // Server might be down during restart, keep polling
+        }
+      }, 3000);
     } catch (e) {
       setUpdateMsg(e.message || 'Update failed');
-    } finally {
       setIsUpdating(false);
     }
   };
@@ -94,6 +111,10 @@ export function SettingsModal({ onClose, onSave }) {
               )}
               <span>Version: <strong style={{ color: 'var(--cyan)' }}>v{agentVersion}</strong></span>
             </div>
+          </div>
+
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: 12 }}>
+            Last Git Update: <strong style={{ color: 'var(--text-2)' }}>{lastUpdated}</strong>
           </div>
           
           {stats && (

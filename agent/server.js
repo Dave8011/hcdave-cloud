@@ -44,7 +44,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.1.0${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.1.1${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -266,11 +266,16 @@ app.get('/health', (_, res) => {
   const memUsage = Math.round(((totalMem - freeMem) / totalMem) * 100);
   const uptimeHours = (os.uptime() / 3600).toFixed(1);
   const load = os.loadavg()[0].toFixed(2);
+  let lastUpdated = 'Unknown';
+  try {
+    lastUpdated = execSync('git log -1 --format="%cd" --date=short', { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).trim();
+  } catch (_) {}
 
   res.json({ 
     status: 'ok', 
     version: VERSION, 
     localIp: getLocalIp(), 
+    lastUpdated,
     stats: { memUsage, uptimeHours, load },
     time: new Date().toISOString() 
   });
@@ -464,6 +469,7 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
         console.log('🔄 Executing update...');
         // We go up one directory since server.js is inside agent/
         const projectRoot = path.join(__dirname, '..');
+        execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
         execSync('git reset --hard HEAD && git pull', { cwd: projectRoot, stdio: 'ignore' });
         
         console.log('🔄 Restarting service...');

@@ -64,14 +64,14 @@ export function FilePreviewModal({ file, driveId, onClose }) {
           )}
 
           {file.type === 'video' && streamUrl && (
-            <>
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', alignItems: 'center' }}>
               <video controls autoPlay className="preview-video">
                 <source src={streamUrl} />
               </video>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', textAlign: 'center', marginTop: 8 }}>
-                (If video plays but has no sound, the audio codec may not be supported by your web browser)
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', textAlign: 'center', marginTop: 8, paddingBottom: 8 }}>
+                (Note: Browsers cannot play AC3/DTS surround sound audio)
               </div>
-            </>
+            </div>
           )}
 
           {(file.type !== 'image' && file.type !== 'video') && (
