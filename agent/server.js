@@ -57,7 +57,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.2.3${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.2.4${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -371,10 +371,11 @@ app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
   }
 });
 
-// GET /api/download — bounded chunked range streaming
-const MAX_STREAM_CHUNK = 16 * 1024 * 1024; // 16 MB max per response
+// GET|HEAD /api/download — RFC 7233-compliant bounded range streaming
+// Cloudflare-safe: no-transform, no gzip, always unencoded 206 responses
+const MAX_STREAM_CHUNK = 16 * 1024 * 1024; // 16 MB cap per response
 
-app.get('/api/download', rateLimitAuth, auth, (req, res) => {
+function serveFile(req, res) {
   const drives  = getMountedDrives();
   const driveId = req.query.driveId;
   const drive   = drives.find(d => d.id === driveId) || drives[0];
@@ -390,36 +391,67 @@ app.get('/api/download', rateLimitAuth, auth, (req, res) => {
   if (stat.isDirectory()) return res.status(400).json({ error: 'Cannot download a directory' });
 
   const fileSize = stat.size;
-  const range    = req.headers.range;
   const mime     = getMime(filePath);
+  const isHead   = req.method === 'HEAD';
 
-  if (range) {
-    // Bounded Partial Content — cap each response to MAX_STREAM_CHUNK
-    // This prevents Cloudflare from buffering a 5 GB response in one request
-    const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
-    const start        = parseInt(startStr, 10);
-    const requestedEnd = endStr ? parseInt(endStr, 10) : fileSize - 1;
-    const end          = Math.min(requestedEnd, start + MAX_STREAM_CHUNK - 1, fileSize - 1);
+  // Common headers on every response — no-transform tells Cloudflare + proxies
+  // not to gzip/br encode the body (encoded 206 breaks range caching)
+  const baseHeaders = {
+    'Accept-Ranges':   'bytes',
+    'Content-Type':    mime,
+    'Cache-Control':   'no-transform, private',
+    'Last-Modified':   stat.mtime.toUTCString(),
+  };
+
+  const rangeHeader = req.headers.range;
+
+  if (rangeHeader) {
+    // --- Parse: only support first range of a multi-range header ---
+    const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+    if (!match) {
+      // Malformed range header
+      res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${fileSize}`, 'Content-Length': 0 });
+      return res.end();
+    }
+
+    const start        = parseInt(match[1], 10);
+    const requestedEnd = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+
+    // 416 Range Not Satisfiable — start beyond end of file
+    if (start >= fileSize || requestedEnd >= fileSize && match[2] || start > requestedEnd) {
+      res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${fileSize}`, 'Content-Length': 0 });
+      return res.end();
+    }
+
+    // Clamp end: honour requested end but cap to MAX_STREAM_CHUNK and file boundary
+    const end    = Math.min(requestedEnd, start + MAX_STREAM_CHUNK - 1, fileSize - 1);
+    const length = end - start + 1;
 
     res.writeHead(206, {
+      ...baseHeaders,
       'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges':  'bytes',
-      'Content-Length': end - start + 1,
-      'Content-Type':   mime,
+      'Content-Length': length,
     });
+
+    if (isHead) return res.end();
     fs.createReadStream(filePath, { start, end }).pipe(res);
+
   } else {
-    // For direct download (not streaming), honour inline flag
+    // --- No Range header: full file (download) or HEAD ---
     const disposition = req.query.inline === 'true' ? 'inline' : 'attachment';
     res.writeHead(200, {
+      ...baseHeaders,
       'Content-Length':      fileSize,
-      'Content-Type':        mime,
       'Content-Disposition': `${disposition}; filename="${encodeURIComponent(path.basename(filePath))}"`,
-      'Accept-Ranges':       'bytes',
     });
+
+    if (isHead) return res.end();
     fs.createReadStream(filePath).pipe(res);
   }
-});
+}
+
+app.get('/api/download',  rateLimitAuth, auth, serveFile);
+app.head('/api/download', rateLimitAuth, auth, serveFile);
 
 
 // --- Thumbnail Concurrency Queue ---
