@@ -102,6 +102,7 @@ app.use(cors({
   credentials: false,
 }));
 app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 /* ─────────────────────────────────────────────
    AUTH MIDDLEWARE
@@ -459,7 +460,10 @@ app.get('/api/thumbnail', rateLimitAuth, auth, (req, res) => {
 // POST /api/download-zip
 app.post('/api/download-zip', rateLimitAuth, auth, (req, res) => {
   if (!archiver) return res.status(501).json({ error: 'Archiver not installed' });
-  const { driveId, paths } = req.body;
+  let { driveId, paths } = req.body;
+  if (!paths && req.body['paths[]']) paths = req.body['paths[]'];
+  if (typeof paths === 'string') paths = [paths];
+  
   if (!paths || !Array.isArray(paths)) return res.status(400).json({ error: 'Paths must be an array' });
 
   const drives  = getMountedDrives();

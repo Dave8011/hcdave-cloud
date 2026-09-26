@@ -173,35 +173,41 @@ export class StorageService {
     return `${this.getDownloadUrl(driveId, filePath)}&inline=true&token=${encodeURIComponent(this.getToken())}`;
   }
 
-  // Trigger browser download securely via fetch + blob URL
-  static async downloadFile(driveId, filePath, fileName) {
-    const url = this.getDownloadUrl(driveId, filePath);
-    const r = await fetch(url, { headers: this.headers() });
-    if (!r.ok) throw new Error('Download failed');
-    const blob = await r.blob();
+  // Trigger browser download directly without fetch to avoid CORS and RAM limits
+  static downloadFile(driveId, filePath, fileName) {
+    const url = `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getToken())}`;
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = fileName;
+    document.body.appendChild(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    document.body.removeChild(a);
   }
 
   static getThumbnailUrl(driveId, filePath) {
     return `${this.getAgentUrl()}/api/thumbnail?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(this.getToken())}`;
   }
 
-  static async downloadZip(driveId, paths) {
-    const r = await fetch(`${this.getAgentUrl()}/api/download-zip`, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({ driveId, paths })
+  static downloadZip(driveId, paths) {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = `${this.getAgentUrl()}/api/download-zip?token=${encodeURIComponent(this.getToken())}`;
+    form.style.display = 'none';
+
+    const driveInput = document.createElement('input');
+    driveInput.name = 'driveId';
+    driveInput.value = driveId;
+    form.appendChild(driveInput);
+
+    paths.forEach(p => {
+      const pInput = document.createElement('input');
+      pInput.name = 'paths[]';
+      pInput.value = p;
+      form.appendChild(pInput);
     });
-    if (!r.ok) throw new Error('Zip download failed');
-    const blob = await r.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = "hcdave_cloud_download.zip";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
   }
 }
