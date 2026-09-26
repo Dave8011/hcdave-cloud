@@ -9,6 +9,19 @@ const crypto   = require('crypto');
 const multer   = require('multer');
 const os       = require('os');
 
+/* ─────────────────────────────────────────────
+   AUTO-INSTALL MISSING DEPENDENCIES
+   ───────────────────────────────────────────── */
+try {
+  require.resolve('sharp');
+  require.resolve('archiver');
+} catch (e) {
+  console.log('🔄 Missing dependencies detected (sharp/archiver). Installing now...');
+  execSync('npm install --omit=dev', { cwd: __dirname, stdio: 'inherit' });
+}
+const sharp = require('sharp');
+const archiver = require('archiver');
+
 function getLocalIp() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
@@ -44,7 +57,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.1.4${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.2.0${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -401,6 +414,61 @@ app.get('/api/download', rateLimitAuth, auth, (req, res) => {
   }
 });
 
+// GET /api/thumbnail
+app.get('/api/thumbnail', rateLimitAuth, auth, (req, res) => {
+  if (!sharp) return res.status(501).json({ error: 'Sharp not installed' });
+  const drives  = getMountedDrives();
+  const drive   = drives.find(d => d.id === req.query.driveId) || drives[0];
+  if (!drive) return res.status(404).json({ error: 'Drive not found' });
+  let filePath;
+  try { filePath = safePath(drive.mount, req.query.path || ''); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+  try {
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    const readStream = fs.createReadStream(filePath);
+    const transform = sharp().resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 });
+    readStream.pipe(transform).pipe(res);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/download-zip
+app.post('/api/download-zip', rateLimitAuth, auth, (req, res) => {
+  if (!archiver) return res.status(501).json({ error: 'Archiver not installed' });
+  const { driveId, paths } = req.body;
+  if (!paths || !Array.isArray(paths)) return res.status(400).json({ error: 'Paths must be an array' });
+
+  const drives  = getMountedDrives();
+  const drive   = drives.find(d => d.id === driveId) || drives[0];
+  if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'attachment; filename="hcdave_cloud_download.zip"');
+
+  const archive = archiver('zip', { zlib: { level: 1 } });
+  archive.on('error', (err) => { console.error(err); res.status(500).end(); });
+  archive.pipe(res);
+
+  for (const p of paths) {
+    try {
+      const filePath = safePath(drive.mount, p);
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath);
+        if (stat.isFile()) {
+          archive.file(filePath, { name: path.basename(filePath) });
+        } else if (stat.isDirectory()) {
+          archive.directory(filePath, path.basename(filePath));
+        }
+      }
+    } catch(e) {}
+  }
+  archive.finalize();
+});
+
 // POST /api/upload
 app.post('/api/upload', rateLimitAuth, auth, upload.array('file', 50), (req, res) => {
   res.json({ success: true, uploaded: req.files?.length || 0 });
@@ -490,6 +558,9 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
         execSync('git reset --hard HEAD && git pull', { cwd: repoDir, stdio: 'ignore' });
         execSync('cp -r agent/* /opt/hcdave-agent/', { cwd: repoDir, stdio: 'ignore' });
         
+        console.log('📦 Installing dependencies...');
+        execSync('npm install --omit=dev', { cwd: '/opt/hcdave-agent', stdio: 'ignore' });
+
         console.log('🔄 Restarting service...');
         execSync('systemctl restart hcdave-agent', { stdio: 'ignore' });
       } catch (e) {

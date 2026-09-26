@@ -1146,3 +1146,50 @@ body::before {
   .mobile-menu-btn { order: 1; }
   .top-actions { order: 1; }
 }
+.desktop-only { display: none; } @media (min-width: 768px) { .desktop-only { display: flex; } }
+
+/* New UI Elements */
+.card-checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
+  background: var(--bg-card);
+  border-radius: 4px;
+  padding: 4px;
+  display: flex;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.card-checkbox input, .list-checkbox input {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+}
+.file-card.selected {
+  border-color: var(--blue);
+  background: rgba(43, 80, 255, 0.05);
+}
+.list-row.selected {
+  background: rgba(43, 80, 255, 0.05);
+  border-color: var(--blue);
+}
+.floating-action-bar {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 12px 24px;
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  z-index: 100;
+  animation: slideUp 0.3s ease-out;
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translate(-50%, 20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}

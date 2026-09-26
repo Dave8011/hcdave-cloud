@@ -4,6 +4,7 @@ import {
   Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen, Share2, RefreshCw
 } from 'lucide-react';
 import { ShareModal } from './ShareModal';
+import { StorageService } from '../services/api';
 
 const TYPE_MAP = {
   folder:   { cls: 'folder',   Icon: Folder },
@@ -16,6 +17,29 @@ const TYPE_MAP = {
 export function FileExplorer({ files, isLoading, activeDrive, currentPath, setCurrentPath, onSelectFile }) {
   const [view, setView] = useState('grid');
   const [shareFile, setShareFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState(new Set());
+
+  
+  const toggleSelect = (file, e) => {
+    e.stopPropagation();
+    const newSet = new Set(selectedFiles);
+    if (newSet.has(file.path)) {
+      newSet.delete(file.path);
+    } else {
+      newSet.add(file.path);
+    }
+    setSelectedFiles(newSet);
+  };
+
+  const handleDownloadZip = async () => {
+    if (selectedFiles.size === 0) return;
+    try {
+      await StorageService.downloadZip(activeDrive.id, Array.from(selectedFiles));
+      setSelectedFiles(new Set());
+    } catch (e) {
+      alert('Failed to download ZIP: ' + e.message);
+    }
+  };
 
   const navigate = (file) => {
     if (file.type === 'folder') {
@@ -97,14 +121,21 @@ export function FileExplorer({ files, isLoading, activeDrive, currentPath, setCu
           {files.map((file) => {
             const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;
             return (
-              <div key={file.id} className="file-card" onClick={() => navigate(file)}>
+              <div key={file.id} className={`file-card ${selectedFiles.has(file.path) ? 'selected' : ''}`} onClick={() => navigate(file)} style={{ position: 'relative' }}>
+                <div className="card-checkbox" onClick={(e) => toggleSelect(file, e)}>
+                  <input type="checkbox" checked={selectedFiles.has(file.path)} readOnly />
+                </div>
                 <div className="card-top">
                   <div className={`file-icon ${cls}`}>
-                    <Icon size={22} />
+                    {file.type === 'image' ? (
+                      <img src={StorageService.getThumbnailUrl(activeDrive.id, file.path)} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--r-md)' }} alt={file.name} />
+                    ) : (
+                      <Icon size={22} />
+                    )}
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button
-                      className="card-action btn-icon"
+                      className="card-action btn-icon desktop-only"
                       style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
                       onClick={(e) => { e.stopPropagation(); setShareFile(file); }}
                       title="Share"
@@ -112,7 +143,7 @@ export function FileExplorer({ files, isLoading, activeDrive, currentPath, setCu
                       <Share2 size={14} />
                     </button>
                     <button
-                      className="card-action btn-icon"
+                      className="card-action btn-icon desktop-only"
                       style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
                       onClick={(e) => { e.stopPropagation(); onSelectFile(file); }}
                     >
@@ -142,20 +173,28 @@ export function FileExplorer({ files, isLoading, activeDrive, currentPath, setCu
             return (
               <div
                 key={file.id}
-                className="list-row"
+                className={`list-row ${selectedFiles.has(file.path) ? 'selected' : ''}`}
                 style={{ animationDelay: `${i * 0.04}s` }}
                 onClick={() => navigate(file)}
               >
-                <div className={`file-icon ${cls}`} style={{ width: 32, height: 32 }}>
-                  <Icon size={17} />
+                <div className="list-checkbox" onClick={(e) => toggleSelect(file, e)} style={{ marginRight: 12 }}>
+                  <input type="checkbox" checked={selectedFiles.has(file.path)} readOnly />
+                </div>
+                <div className={`file-icon ${cls}`} style={{ width: 32, height: 32, overflow: 'hidden' }}>
+                  {file.type === 'image' ? (
+                    <img src={StorageService.getThumbnailUrl(activeDrive.id, file.path)} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={file.name} />
+                  ) : (
+                    <Icon size={17} />
+                  )}
                 </div>
                 <div className="list-name">{file.name}</div>
                 <div className="list-meta">{file.modified}</div>
                 <div className="list-meta">{file.size}</div>
                 <div className="list-actions" onClick={(e) => e.stopPropagation()}>
                   <button
+                    className="desktop-only"
                     style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex', marginRight: 4 }}
-                    onClick={() => setShareFile(file)}
+                    onClick={(e) => { e.stopPropagation(); setShareFile(file); }}
                     title="Share"
                   >
                     <Share2 size={14} />
@@ -179,6 +218,16 @@ export function FileExplorer({ files, isLoading, activeDrive, currentPath, setCu
           driveId={activeDrive.id}
           onClose={() => setShareFile(null)}
         />
+      )}
+
+      {selectedFiles.size > 0 && (
+        <div className="floating-action-bar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <span style={{ fontWeight: 600 }}>{selectedFiles.size} selected</span>
+            <button className="btn-secondary" onClick={() => setSelectedFiles(new Set())}>Clear</button>
+          </div>
+          <button className="btn-primary" onClick={handleDownloadZip}>Download Zip</button>
+        </div>
       )}
     </div>
   );

@@ -7,6 +7,7 @@ export function SettingsModal({ onClose, onSave }) {
   const [saved, setSaved] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateMsg, setUpdateMsg] = useState('');
+  const [showConfirm, setShowConfirm] = useState(false);
   const [agentVersion, setAgentVersion] = useState('Checking...');
   const [localIp, setLocalIp] = useState('');
   const [lastUpdated, setLastUpdated] = useState('');
@@ -30,13 +31,15 @@ export function SettingsModal({ onClose, onSave }) {
     }, 800);
   };
 
-  const handleUpdate = async () => {
-    if (!window.confirm('This will update the backend on your Home Server to the latest GitHub code and restart it. Continue?')) return;
+
+  const triggerUpdate = async () => {
+    setShowConfirm(false);
     try {
       setIsUpdating(true);
       setUpdateMsg('Sending update command...');
       const res = await StorageService.updateAgent();
       setUpdateMsg(res.message || 'Update started. Waiting for server restart...');
+
       
       // Poll for version change
       const poll = setInterval(async () => {
@@ -61,6 +64,27 @@ export function SettingsModal({ onClose, onSave }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
+
+      {showConfirm && (
+        <div className="modal-overlay" onClick={() => setShowConfirm(false)} style={{ zIndex: 1000, background: 'rgba(0,0,0,0.8)' }}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 320, animation: 'scaleIn 0.2s ease-out' }}>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ background: 'rgba(99,102,241,0.1)', width: 64, height: 64, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                <RefreshCw size={32} color="var(--indigo)" />
+              </div>
+              <h3 style={{ margin: '0 0 8px 0', color: 'var(--text-1)' }}>Update Server</h3>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-2)', lineHeight: 1.5 }}>
+                This will securely download the latest software to your Home Server and restart the backend.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => setShowConfirm(false)}>Cancel</button>
+              <button className="btn btn-primary" style={{ flex: 1 }} onClick={triggerUpdate}>Update Now</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title-row">
           <div className="modal-title">Connection Settings</div>
@@ -131,7 +155,7 @@ export function SettingsModal({ onClose, onSave }) {
           <button 
             className="btn" 
             style={{ width: '100%', background: 'rgba(255,255,255,0.05)', color: 'var(--text-1)', border: '1px solid rgba(255,255,255,0.1)' }}
-            onClick={handleUpdate}
+            onClick={() => setShowConfirm(true)}
             disabled={isUpdating}
           >
             {isUpdating ? <RefreshCw size={14} className="spin" /> : <RefreshCw size={14} />}

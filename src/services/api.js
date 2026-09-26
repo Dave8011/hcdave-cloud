@@ -185,4 +185,23 @@ export class StorageService {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
   }
+
+  static getThumbnailUrl(driveId, filePath) {
+    return `${this.getAgentUrl()}/api/thumbnail?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(this.getToken())}`;
+  }
+
+  static async downloadZip(driveId, paths) {
+    const r = await fetch(`${this.getAgentUrl()}/api/download-zip`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, paths })
+    });
+    if (!r.ok) throw new Error('Zip download failed');
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = "hcdave_cloud_download.zip";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  }
 }
