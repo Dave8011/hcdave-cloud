@@ -30,8 +30,11 @@ export function FilePreviewModal({ file, driveId, onClose }) {
     }
   };
 
-  const streamUrl = (file.type === 'image' || file.type === 'video')
+  const streamUrl = file.type === 'video'
     ? StorageService.getStreamUrl(driveId, file.path || file.name)
+    : null;
+  const previewUrl = file.type === 'image'
+    ? StorageService.getPreviewUrl(driveId, file.path || file.name)
     : null;
 
   return (
@@ -59,8 +62,8 @@ export function FilePreviewModal({ file, driveId, onClose }) {
 
         {/* Preview Body */}
         <div className="preview-media-wrap">
-          {file.type === 'image' && streamUrl && (
-            <img src={streamUrl} alt={file.name} className="preview-img" />
+          {file.type === 'image' && previewUrl && (
+            <img src={previewUrl} alt={file.name} className="preview-img" />
           )}
 
           {file.type === 'video' && streamUrl && (

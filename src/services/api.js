@@ -188,6 +188,10 @@ export class StorageService {
     return `${this.getAgentUrl()}/api/thumbnail?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(this.getToken())}`;
   }
 
+  static getPreviewUrl(driveId, filePath) {
+    return `${this.getAgentUrl()}/api/thumbnail?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}&size=preview&token=${encodeURIComponent(this.getToken())}`;
+  }
+
   static downloadZip(driveId, paths) {
     const form = document.createElement('form');
     form.method = 'POST';

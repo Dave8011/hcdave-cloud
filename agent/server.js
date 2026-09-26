@@ -57,7 +57,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.2.1${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.2.2${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -423,14 +423,14 @@ const thumbQueue = [];
 
 function processNextThumb() {
   if (activeThumbs >= THUMB_CONCURRENCY || thumbQueue.length === 0) return;
-  const { req, res, filePath } = thumbQueue.shift();
+  const { req, res, filePath, imgWidth = 300, imgHeight = 300, quality = 70, fit = 'cover', cacheAge = '86400' } = thumbQueue.shift();
   activeThumbs++;
 
   res.setHeader('Content-Type', 'image/jpeg');
-  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.setHeader('Cache-Control', `public, max-age=${cacheAge}`);
   
   const readStream = fs.createReadStream(filePath);
-  const transform = sharp().resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 });
+  const transform = sharp().resize(imgWidth, imgHeight, { fit, withoutEnlargement: true }).jpeg({ quality });
   
   transform.on('end', () => { activeThumbs--; processNextThumb(); });
   transform.on('error', (e) => { 
@@ -442,7 +442,7 @@ function processNextThumb() {
   readStream.pipe(transform).pipe(res);
 }
 
-// GET /api/thumbnail
+// GET /api/thumbnail — supports ?size=thumb (300px, default) or ?size=preview (1200px)
 app.get('/api/thumbnail', rateLimitAuth, auth, (req, res) => {
   if (!sharp) return res.status(501).json({ error: 'Sharp not installed' });
   const drives  = getMountedDrives();
@@ -453,7 +453,14 @@ app.get('/api/thumbnail', rateLimitAuth, auth, (req, res) => {
   catch (e) { return res.status(400).json({ error: e.message }); }
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
 
-  thumbQueue.push({ req, res, filePath });
+  const isPreview = req.query.size === 'preview';
+  const imgWidth  = isPreview ? 1200 : 300;
+  const imgHeight = isPreview ? 1200 : 300;
+  const quality   = isPreview ? 85 : 70;
+  const fit       = isPreview ? 'inside' : 'cover';
+  const cacheAge  = isPreview ? '3600' : '86400';
+
+  thumbQueue.push({ req, res, filePath, imgWidth, imgHeight, quality, fit, cacheAge });
   processNextThumb();
 });
 
