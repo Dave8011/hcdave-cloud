@@ -57,7 +57,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.2.4${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.2.5${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -268,6 +268,15 @@ const multerStorage = multer.diskStorage({
   }
 });
 const upload = multer({ storage: multerStorage, limits: { fileSize: 50 * 1024 * 1024 * 1024 } }); // 50 GB max
+
+// Separate multer instance for chunk pieces — memory storage, max 55 MB per chunk
+const CHUNK_TMP_DIR = '/tmp/hcdave-chunks';
+try { fs.mkdirSync(CHUNK_TMP_DIR, { recursive: true }); } catch (_) {}
+
+const chunkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 55 * 1024 * 1024 },
+});
 
 /* ─────────────────────────────────────────────
    ROUTES
@@ -538,7 +547,64 @@ app.post('/api/download-zip', rateLimitAuth, auth, (req, res) => {
   archive.finalize();
 });
 
-// POST /api/upload
+// POST /api/upload-chunk
+// Receives a single 50 MB slice and writes it to /tmp/hcdave-chunks/
+app.post('/api/upload-chunk', rateLimitAuth, auth, chunkUpload.single('chunk'), (req, res) => {
+  try {
+    const { uploadId, chunkIndex } = req.body;
+    if (!uploadId || chunkIndex === undefined || !req.file) {
+      return res.status(400).json({ error: 'Missing uploadId, chunkIndex or chunk data' });
+    }
+    const tmpPath = path.join(CHUNK_TMP_DIR, `${uploadId}-${chunkIndex}`);
+    fs.writeFileSync(tmpPath, req.file.buffer);
+    res.json({ success: true, chunkIndex: Number(chunkIndex) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/upload-complete
+// Merges all chunks into the final file and cleans up temp pieces
+app.post('/api/upload-complete', rateLimitAuth, auth, async (req, res) => {
+  try {
+    const { uploadId, driveId, path: uploadPath, filename, totalChunks } = req.body;
+    if (!uploadId || !filename || !totalChunks) {
+      return res.status(400).json({ error: 'Missing uploadId, filename or totalChunks' });
+    }
+
+    const drives = getMountedDrives();
+    const drive  = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const destDir  = safePath(drive.mount, uploadPath || '/');
+    fs.mkdirSync(destDir, { recursive: true });
+    const destFile = path.join(destDir, filename);
+
+    // Stream-merge chunks in order
+    const writeStream = fs.createWriteStream(destFile);
+    for (let i = 0; i < Number(totalChunks); i++) {
+      const chunkPath = path.join(CHUNK_TMP_DIR, `${uploadId}-${i}`);
+      if (!fs.existsSync(chunkPath)) {
+        writeStream.destroy();
+        return res.status(400).json({ error: `Missing chunk ${i}` });
+      }
+      const data = fs.readFileSync(chunkPath);
+      writeStream.write(data);
+      fs.unlinkSync(chunkPath); // delete as we go to free space
+    }
+    await new Promise((resolve, reject) => {
+      writeStream.end();
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
+
+    res.json({ success: true, filename, path: path.join(uploadPath || '/', filename) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/upload (legacy single-file route — kept for small files < 100 MB)
 app.post('/api/upload', rateLimitAuth, auth, upload.array('file', 50), (req, res) => {
   res.json({ success: true, uploaded: req.files?.length || 0 });
 });
@@ -572,24 +638,70 @@ app.post('/api/mkdir', rateLimitAuth, auth, (req, res) => {
   }
 });
 
+// POST /api/delete
+app.post('/api/delete', rateLimitAuth, auth, (req, res) => {
+  let { driveId, paths } = req.body;
+  if (!paths && req.body['paths[]']) paths = req.body['paths[]'];
+  if (typeof paths === 'string') paths = [paths];
+
+  if (!paths || !Array.isArray(paths) || paths.length === 0) {
+    return res.status(400).json({ error: 'Paths must be a non-empty array' });
+  }
+
+  const drives = getMountedDrives();
+  const drive = drives.find(d => d.id === driveId) || drives[0];
+  if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+  let deletedCount = 0;
+  const errors = [];
+
+  for (const p of paths) {
+    try {
+      const fullPath = safePath(drive.mount, p);
+      const resolvedMount = path.resolve(drive.mount);
+      if (path.resolve(fullPath) === resolvedMount) {
+        errors.push(`Cannot delete drive root path: ${p}`);
+        continue;
+      }
+      if (fs.existsSync(fullPath)) {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+        deletedCount++;
+      } else {
+        errors.push(`File not found: ${p}`);
+      }
+    } catch (err) {
+      console.error(`Error deleting ${p}:`, err);
+      errors.push(`Failed to delete ${p}: ${err.message}`);
+    }
+  }
+
+  res.json({ success: true, deleted: deletedCount, errors });
+});
+
 // POST /api/share
 app.post('/api/share', rateLimitAuth, auth, (req, res) => {
-  const { driveId, filePath, burnAfterReading } = req.body;
-  if (!driveId || !filePath) return res.status(400).json({ error: 'Missing driveId or filePath' });
+  const { driveId, filePath, filePaths, burnAfterReading } = req.body;
+  const targetPaths = filePaths || (filePath ? [filePath] : null);
+  if (!driveId || !targetPaths || !Array.isArray(targetPaths) || targetPaths.length === 0) {
+    return res.status(400).json({ error: 'Missing driveId or target file path(s)' });
+  }
 
   const drives = getMountedDrives();
   const drive = drives.find(d => d.id === driveId);
   if (!drive) return res.status(404).json({ error: 'Drive not found' });
 
   try {
-    const fullPath = safePath(drive.mount, filePath);
-    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File not found' });
+    for (const p of targetPaths) {
+      const fullPath = safePath(drive.mount, p);
+      if (!fs.existsSync(fullPath)) return res.status(404).json({ error: `File not found: ${p}` });
+    }
     
     const token = crypto.randomBytes(16).toString('hex');
     const shares = loadShares();
     shares[token] = {
       driveId,
-      filePath,
+      filePath: targetPaths.length === 1 ? targetPaths[0] : null,
+      filePaths: targetPaths.length > 1 ? targetPaths : null,
       burnAfterReading: !!burnAfterReading,
       createdAt: new Date().toISOString()
     };

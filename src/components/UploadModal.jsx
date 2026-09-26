@@ -8,6 +8,8 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
   const [uploading, setUploading] = useState(false);
   const [done, setDone] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [currentFileName, setCurrentFileName] = useState('');
+  const [uploadError, setUploadError] = useState('');
   const inputRef = useRef();
 
   const addFiles = (incoming) => {
@@ -25,26 +27,31 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
     if (!files.length || !activeDrive) return;
     setUploading(true);
     setProgress(0);
+    setUploadError('');
 
-    // Upload files sequentially with cumulative progress
-    for (let i = 0; i < files.length; i++) {
-      await StorageService.uploadFile(
-        activeDrive.id,
-        files[i],
-        currentPath || '/',
-        (p) => {
-          const overall = Math.round(((i + p / 100) / files.length) * 100);
-          setProgress(overall);
-        }
-      );
+    try {
+      for (let i = 0; i < files.length; i++) {
+        setCurrentFileName(files[i].name);
+        await StorageService.uploadFile(
+          activeDrive.id,
+          files[i],
+          currentPath || '/',
+          (p) => {
+            // p is 0-100 for the current file; scale across all files
+            const overall = Math.round(((i + p / 100) / files.length) * 100);
+            setProgress(overall);
+          }
+        );
+      }
+    } catch (e) {
+      setUploadError(e.message || 'Upload failed');
+      setUploading(false);
+      return;
     }
 
     setUploading(false);
     setDone(true);
-    setTimeout(() => {
-      onUploadComplete();
-      onClose();
-    }, 1400);
+    setTimeout(() => { onUploadComplete(); onClose(); }, 1400);
   };
 
   return (
@@ -113,16 +120,26 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
               </div>
             )}
 
-            {/* Progress */}
             {uploading && (
               <div className="upload-progress">
                 <div className="upload-progress-label">
-                  <span>Uploading {files.length} file{files.length > 1 ? 's' : ''}…</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                    {currentFileName || 'Uploading…'}
+                  </span>
                   <span>{progress}%</span>
                 </div>
                 <div className="prog-bg">
                   <div className="prog-fill" style={{ width: `${progress}%` }} />
                 </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', marginTop: 6 }}>
+                  Files are sent in 50 MB chunks to stay within network limits.
+                </div>
+              </div>
+            )}
+
+            {uploadError && (
+              <div style={{ fontSize: '0.82rem', color: 'var(--rose)', marginBottom: 12 }}>
+                ⚠ {uploadError}
               </div>
             )}
 

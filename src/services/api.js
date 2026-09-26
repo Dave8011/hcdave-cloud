@@ -77,34 +77,62 @@ export class StorageService {
   }
 
   // POST /api/upload — upload a file with real progress
-  static uploadFile(driveId, file, path = '/', onProgress) {
-    return new Promise((resolve, reject) => {
-      const form = new FormData();
-      form.append('driveId', driveId);
-      form.append('path', path);
-      form.append('file', file); // file must be last for multer diskStorage
+  static uploadFile(driveId, file, uploadPath = '/', onProgress) {
+    const CHUNK_SIZE   = 50 * 1024 * 1024; // 50 MB per chunk
+    const totalChunks  = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    const uploadId     = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-      const xhr = new XMLHttpRequest();
+    return new Promise(async (resolve, reject) => {
+      try {
+        for (let i = 0; i < totalChunks; i++) {
+          const start  = i * CHUNK_SIZE;
+          const end    = Math.min(start + CHUNK_SIZE, file.size);
+          const chunk  = file.slice(start, end);
 
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) {
-          onProgress(Math.round((e.loaded / e.total) * 100));
+          const form = new FormData();
+          form.append('uploadId',    uploadId);
+          form.append('driveId',     driveId);
+          form.append('path',        uploadPath);
+          form.append('filename',    file.name);
+          form.append('chunkIndex',  i);
+          form.append('totalChunks', totalChunks);
+          form.append('chunk',       chunk, file.name);
+
+          await new Promise((res2, rej2) => {
+            const xhr = new XMLHttpRequest();
+            xhr.upload.onprogress = (e) => {
+              if (e.lengthComputable && onProgress) {
+                // Combine completed chunks + progress within current chunk
+                const overall = Math.round(((i + e.loaded / e.total) / totalChunks) * 100);
+                onProgress(overall);
+              }
+            };
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) res2();
+              else rej2(new Error(`Chunk ${i} failed: ${xhr.status}`));
+            };
+            xhr.onerror  = () => rej2(new Error('Network error on chunk ' + i));
+            xhr.open('POST', `${this.getAgentUrl()}/api/upload-chunk`);
+            xhr.setRequestHeader('Authorization', `Bearer ${this.getToken()}`);
+            xhr.send(form);
+          });
         }
-      };
 
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText));
-        } else {
-          reject(new Error('Upload failed'));
+        // All chunks sent — tell the server to merge them
+        const r = await fetch(`${this.getAgentUrl()}/api/upload-complete`, {
+          method: 'POST',
+          headers: this.headers(),
+          body: JSON.stringify({ uploadId, driveId, path: uploadPath, filename: file.name, totalChunks }),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          throw new Error(err.error || 'Upload assembly failed');
         }
-      };
-
-      xhr.onerror = () => reject(new Error('Network error'));
-
-      xhr.open('POST', `${this.getAgentUrl()}/api/upload`);
-      xhr.setRequestHeader('Authorization', `Bearer ${this.getToken()}`);
-      xhr.send(form);
+        if (onProgress) onProgress(100);
+        resolve(await r.json());
+      } catch (e) {
+        reject(e);
+      }
     });
   }
 
@@ -120,12 +148,31 @@ export class StorageService {
     return data;
   }
 
+  // POST /api/delete — delete single or multiple files/folders
+  static async deleteFiles(driveId, paths) {
+    const pathList = Array.isArray(paths) ? paths : [paths];
+    const r = await fetch(`${this.getAgentUrl()}/api/delete`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, paths: pathList })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to delete file(s)');
+    return data;
+  }
+
   // POST /api/share
-  static async createShareLink(driveId, filePath, burnAfterReading) {
+  static async createShareLink(driveId, filePathOrPaths, burnAfterReading) {
+    const payload = { driveId, burnAfterReading };
+    if (Array.isArray(filePathOrPaths)) {
+      payload.filePaths = filePathOrPaths;
+    } else {
+      payload.filePath = filePathOrPaths;
+    }
     const r = await fetch(`${this.getAgentUrl()}/api/share`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ driveId, filePath, burnAfterReading })
+      body: JSON.stringify(payload)
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed to create share link');

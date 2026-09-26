@@ -181,6 +181,7 @@ export default function App() {
           currentPath={currentPath}
           setCurrentPath={(p) => { setCurrentPath(p); setSearch(''); }}
           onSelectFile={setSelectedFile}
+          onRefresh={loadFiles}
         />
       </main>
 

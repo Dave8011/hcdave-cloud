@@ -3,7 +3,7 @@ import { X, Share2, Copy, Check, Flame } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { StorageService } from '../services/api';
 
-export function ShareModal({ file, driveId, onClose }) {
+export function ShareModal({ file, files, driveId, onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [shareLink, setShareLink] = useState(null);
@@ -11,9 +11,17 @@ export function ShareModal({ file, driveId, onClose }) {
   const [burnAfterReading, setBurnAfterReading] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const selectedItems = files || (file ? [file] : []);
+  const targetPaths = selectedItems.map(item => typeof item === 'string' ? item : item.path);
+  const displayName = selectedItems.length === 1
+    ? (selectedItems[0].name || selectedItems[0].path || 'File')
+    : `${selectedItems.length} selected items`;
+
   useEffect(() => {
     let isMounted = true;
-    StorageService.createShareLink(driveId, file.path, false)
+    if (targetPaths.length === 0) return;
+
+    StorageService.createShareLink(driveId, targetPaths.length === 1 ? targetPaths[0] : targetPaths, false)
       .then(data => {
         if (isMounted) {
           setShareToken(data.token);
@@ -28,7 +36,7 @@ export function ShareModal({ file, driveId, onClose }) {
         }
       });
     return () => { isMounted = false; };
-  }, [driveId, file.path]);
+  }, [driveId, targetPaths.join(',')]);
 
   const handleBurnToggle = async (checked) => {
     setBurnAfterReading(checked);
@@ -54,15 +62,15 @@ export function ShareModal({ file, driveId, onClose }) {
         <div className="modal-title-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Share2 size={20} color="var(--indigo)" />
-            <span className="modal-title">Share {file.type === 'folder' ? 'Folder' : 'File'}</span>
+            <span className="modal-title">Share {selectedItems.length > 1 ? 'Items' : (selectedItems[0]?.type === 'folder' ? 'Folder' : 'File')}</span>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)' }}>
             <X size={20} />
           </button>
         </div>
 
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-2)', marginBottom: 20 }}>
-          {file.name}
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-2)', marginBottom: 20, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {displayName}
         </p>
 
         {error ? (
