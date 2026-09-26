@@ -57,7 +57,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.2.2${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.2.3${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -371,7 +371,9 @@ app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
   }
 });
 
-// GET /api/download — streaming with Range header support
+// GET /api/download — bounded chunked range streaming
+const MAX_STREAM_CHUNK = 16 * 1024 * 1024; // 16 MB max per response
+
 app.get('/api/download', rateLimitAuth, auth, (req, res) => {
   const drives  = getMountedDrives();
   const driveId = req.query.driveId;
@@ -392,10 +394,13 @@ app.get('/api/download', rateLimitAuth, auth, (req, res) => {
   const mime     = getMime(filePath);
 
   if (range) {
-    // Partial content (video streaming)
+    // Bounded Partial Content — cap each response to MAX_STREAM_CHUNK
+    // This prevents Cloudflare from buffering a 5 GB response in one request
     const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(startStr, 10);
-    const end   = endStr ? parseInt(endStr, 10) : fileSize - 1;
+    const start        = parseInt(startStr, 10);
+    const requestedEnd = endStr ? parseInt(endStr, 10) : fileSize - 1;
+    const end          = Math.min(requestedEnd, start + MAX_STREAM_CHUNK - 1, fileSize - 1);
+
     res.writeHead(206, {
       'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges':  'bytes',
@@ -404,6 +409,7 @@ app.get('/api/download', rateLimitAuth, auth, (req, res) => {
     });
     fs.createReadStream(filePath, { start, end }).pipe(res);
   } else {
+    // For direct download (not streaming), honour inline flag
     const disposition = req.query.inline === 'true' ? 'inline' : 'attachment';
     res.writeHead(200, {
       'Content-Length':      fileSize,
@@ -454,9 +460,9 @@ app.get('/api/thumbnail', rateLimitAuth, auth, (req, res) => {
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
 
   const isPreview = req.query.size === 'preview';
-  const imgWidth  = isPreview ? 1200 : 300;
-  const imgHeight = isPreview ? 1200 : 300;
-  const quality   = isPreview ? 85 : 70;
+  const imgWidth  = isPreview ? 900 : 300;
+  const imgHeight = isPreview ? 900 : 300;
+  const quality   = isPreview ? 82 : 70;
   const fit       = isPreview ? 'inside' : 'cover';
   const cacheAge  = isPreview ? '3600' : '86400';
 

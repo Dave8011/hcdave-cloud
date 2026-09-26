@@ -177,7 +177,7 @@ export default function App() {
         <FileExplorer
           files={files}
           isLoading={isLoading}
-          activeDrive={activeDrive}
+          activeDrive={activeDrive || { id: activeDriveId, name: 'Drive' }}
           currentPath={currentPath}
           setCurrentPath={(p) => { setCurrentPath(p); setSearch(''); }}
           onSelectFile={setSelectedFile}
