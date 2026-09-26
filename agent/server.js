@@ -57,7 +57,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.2.0${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.2.1${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -414,6 +414,33 @@ app.get('/api/download', rateLimitAuth, auth, (req, res) => {
   }
 });
 
+
+// --- Thumbnail Concurrency Queue ---
+const THUMB_CONCURRENCY = 2;
+let activeThumbs = 0;
+const thumbQueue = [];
+
+function processNextThumb() {
+  if (activeThumbs >= THUMB_CONCURRENCY || thumbQueue.length === 0) return;
+  const { req, res, filePath } = thumbQueue.shift();
+  activeThumbs++;
+
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  
+  const readStream = fs.createReadStream(filePath);
+  const transform = sharp().resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 });
+  
+  transform.on('end', () => { activeThumbs--; processNextThumb(); });
+  transform.on('error', (e) => { 
+    activeThumbs--; 
+    processNextThumb();
+    if (!res.headersSent) res.status(500).end();
+  });
+  
+  readStream.pipe(transform).pipe(res);
+}
+
 // GET /api/thumbnail
 app.get('/api/thumbnail', rateLimitAuth, auth, (req, res) => {
   if (!sharp) return res.status(501).json({ error: 'Sharp not installed' });
@@ -425,15 +452,8 @@ app.get('/api/thumbnail', rateLimitAuth, auth, (req, res) => {
   catch (e) { return res.status(400).json({ error: e.message }); }
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
 
-  try {
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    const readStream = fs.createReadStream(filePath);
-    const transform = sharp().resize(300, 300, { fit: 'cover' }).jpeg({ quality: 70 });
-    readStream.pipe(transform).pipe(res);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  thumbQueue.push({ req, res, filePath });
+  processNextThumb();
 });
 
 // POST /api/download-zip

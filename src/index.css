@@ -1154,11 +1154,13 @@ body::before {
   top: 8px;
   left: 8px;
   z-index: 10;
-  background: var(--bg-card);
-  border-radius: 4px;
+  background: rgba(15, 15, 20, 0.6);
+  backdrop-filter: blur(8px);
+  border-radius: 50%;
   padding: 4px;
   display: flex;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
 }
 .card-checkbox input, .list-checkbox input {
   cursor: pointer;
@@ -1175,19 +1177,32 @@ body::before {
 }
 .floating-action-bar {
   position: fixed;
-  bottom: 20px;
+  bottom: 30px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 12px 24px;
+  background: rgba(20, 20, 25, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 30px;
+  padding: 10px 20px;
   display: flex;
   gap: 24px;
   align-items: center;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   z-index: 100;
   animation: slideUp 0.3s ease-out;
+}
+.floating-action-bar .btn-secondary {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+}
+.floating-action-bar .btn-primary {
+  background: var(--blue);
+  color: white;
+  border-radius: 20px;
+  padding: 8px 16px;
+  border: none;
 }
 @keyframes slideUp {
   from { opacity: 0; transform: translate(-50%, 20px); }
