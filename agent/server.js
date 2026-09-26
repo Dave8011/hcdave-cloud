@@ -404,22 +404,26 @@ function serveFile(req, res) {
   const mime     = getMime(filePath);
   const isHead   = req.method === 'HEAD';
 
-  // Common headers on every response — no-transform tells Cloudflare + proxies
-  // not to gzip/br encode the body (encoded 206 breaks range caching)
   const baseHeaders = {
     'Accept-Ranges':   'bytes',
     'Content-Type':    mime,
-    'Cache-Control':   'no-transform, private',
+    'Cache-Control':   'no-transform, private, no-store',
     'Last-Modified':   stat.mtime.toUTCString(),
+  };
+
+  const streamErrorHandler = (err) => {
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Stream error' });
+    } else {
+      res.end();
+    }
   };
 
   const rangeHeader = req.headers.range;
 
   if (rangeHeader) {
-    // --- Parse: only support first range of a multi-range header ---
     const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
     if (!match) {
-      // Malformed range header
       res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${fileSize}`, 'Content-Length': 0 });
       return res.end();
     }
@@ -427,14 +431,12 @@ function serveFile(req, res) {
     const start        = parseInt(match[1], 10);
     const requestedEnd = match[2] ? parseInt(match[2], 10) : fileSize - 1;
 
-    // 416 Range Not Satisfiable — start beyond end of file
-    if (start >= fileSize || requestedEnd >= fileSize && match[2] || start > requestedEnd) {
+    if (start >= fileSize || start > requestedEnd) {
       res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${fileSize}`, 'Content-Length': 0 });
       return res.end();
     }
 
-    // Clamp end: honour requested end but cap to MAX_STREAM_CHUNK and file boundary
-    const end    = Math.min(requestedEnd, start + MAX_STREAM_CHUNK - 1, fileSize - 1);
+    const end    = Math.min(requestedEnd, fileSize - 1);
     const length = end - start + 1;
 
     res.writeHead(206, {
@@ -444,10 +446,11 @@ function serveFile(req, res) {
     });
 
     if (isHead) return res.end();
-    fs.createReadStream(filePath, { start, end }).pipe(res);
+    const stream = fs.createReadStream(filePath, { start, end });
+    stream.on('error', streamErrorHandler);
+    stream.pipe(res);
 
   } else {
-    // --- No Range header: full file (download) or HEAD ---
     const disposition = req.query.inline === 'true' ? 'inline' : 'attachment';
     res.writeHead(200, {
       ...baseHeaders,
@@ -456,7 +459,9 @@ function serveFile(req, res) {
     });
 
     if (isHead) return res.end();
-    fs.createReadStream(filePath).pipe(res);
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', streamErrorHandler);
+    stream.pipe(res);
   }
 }
 
@@ -480,11 +485,24 @@ function processNextThumb() {
   const readStream = fs.createReadStream(filePath);
   const transform = sharp().resize(imgWidth, imgHeight, { fit, withoutEnlargement: true }).jpeg({ quality });
   
-  transform.on('end', () => { activeThumbs--; processNextThumb(); });
-  transform.on('error', (e) => { 
-    activeThumbs--; 
+  let finished = false;
+  const done = () => {
+    if (finished) return;
+    finished = true;
+    activeThumbs--;
     processNextThumb();
+  };
+
+  res.on('finish', done);
+  res.on('close', done);
+  res.on('error', done);
+  readStream.on('error', (e) => {
     if (!res.headersSent) res.status(500).end();
+    done();
+  });
+  transform.on('error', (e) => { 
+    if (!res.headersSent) res.status(500).end();
+    done();
   });
   
   readStream.pipe(transform).pipe(res);
@@ -829,29 +847,69 @@ app.get('/api/s/:token', (req, res) => {
 function streamFile(fullPath, req, res) {
   const stat = fs.statSync(fullPath);
   if (stat.isDirectory()) return res.status(400).json({ error: 'Cannot download a folder directly' });
+  
   const fileSize = stat.size;
-  const range = req.headers.range;
   const mime = getMime(fullPath);
+  const isHead = req.method === 'HEAD';
 
-  if (range) {
-    const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(startStr, 10);
-    const end = endStr ? parseInt(endStr, 10) : Math.min(start + 10 * 1024 * 1024, fileSize - 1);
+  const baseHeaders = {
+    'Accept-Ranges': 'bytes',
+    'Content-Type': mime,
+    'Cache-Control': 'no-transform, private, no-store',
+    'Last-Modified': stat.mtime.toUTCString(),
+  };
+
+  const streamErrorHandler = (err) => {
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Stream error' });
+    } else {
+      res.end();
+    }
+  };
+
+  const rangeHeader = req.headers.range;
+
+  if (rangeHeader) {
+    const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+    if (!match) {
+      res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${fileSize}`, 'Content-Length': 0 });
+      return res.end();
+    }
+    
+    const start = parseInt(match[1], 10);
+    const requestedEnd = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+
+    if (start >= fileSize || start > requestedEnd) {
+      res.writeHead(416, { ...baseHeaders, 'Content-Range': `bytes */${fileSize}`, 'Content-Length': 0 });
+      return res.end();
+    }
+    
+    const end = Math.min(requestedEnd, fileSize - 1);
+    const length = end - start + 1;
+
     res.writeHead(206, {
+      ...baseHeaders,
       'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': end - start + 1,
-      'Content-Type': mime,
+      'Content-Length': length,
     });
-    fs.createReadStream(fullPath, { start, end }).pipe(res);
+    
+    if (isHead) return res.end();
+    const stream = fs.createReadStream(fullPath, { start, end });
+    stream.on('error', streamErrorHandler);
+    stream.pipe(res);
+
   } else {
+    const disposition = req.query.inline === 'true' || req.query.inline === true ? 'inline' : 'attachment';
     res.writeHead(200, {
+      ...baseHeaders,
       'Content-Length': fileSize,
-      'Content-Type': mime,
-      'Content-Disposition': req.query.inline ? 'inline' : `attachment; filename="${encodeURIComponent(path.basename(fullPath))}"`,
-      'Accept-Ranges': 'bytes',
+      'Content-Disposition': `${disposition}; filename="${encodeURIComponent(path.basename(fullPath))}"`,
     });
-    fs.createReadStream(fullPath).pipe(res);
+    
+    if (isHead) return res.end();
+    const stream = fs.createReadStream(fullPath);
+    stream.on('error', streamErrorHandler);
+    stream.pipe(res);
   }
 }
 
