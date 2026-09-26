@@ -448,6 +448,7 @@ function serveFile(req, res) {
     if (isHead) return res.end();
     const stream = fs.createReadStream(filePath, { start, end });
     stream.on('error', streamErrorHandler);
+    res.on('close', () => { if (!stream.destroyed) stream.destroy(); });
     stream.pipe(res);
 
   } else {
@@ -461,6 +462,7 @@ function serveFile(req, res) {
     if (isHead) return res.end();
     const stream = fs.createReadStream(filePath);
     stream.on('error', streamErrorHandler);
+    res.on('close', () => { if (!stream.destroyed) stream.destroy(); });
     stream.pipe(res);
   }
 }
@@ -896,6 +898,7 @@ function streamFile(fullPath, req, res) {
     if (isHead) return res.end();
     const stream = fs.createReadStream(fullPath, { start, end });
     stream.on('error', streamErrorHandler);
+    res.on('close', () => { if (!stream.destroyed) stream.destroy(); });
     stream.pipe(res);
 
   } else {
@@ -909,6 +912,7 @@ function streamFile(fullPath, req, res) {
     if (isHead) return res.end();
     const stream = fs.createReadStream(fullPath);
     stream.on('error', streamErrorHandler);
+    res.on('close', () => { if (!stream.destroyed) stream.destroy(); });
     stream.pipe(res);
   }
 }
