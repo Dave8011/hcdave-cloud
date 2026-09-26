@@ -123,7 +123,7 @@ export function FileExplorer({ files, isLoading, activeDrive, currentPath, setCu
             return (
               <div key={file.id} className={`file-card ${selectedFiles.has(file.path) ? 'selected' : ''}`} onClick={() => navigate(file)} style={{ position: 'relative' }}>
                 <div className="card-checkbox" onClick={(e) => toggleSelect(file, e)}>
-                  <input type="checkbox" checked={selectedFiles.has(file.path)} readOnly />
+                  <input type="checkbox" name={`select-${file.id}`} aria-label={`Select ${file.name}`} checked={selectedFiles.has(file.path)} readOnly />
                 </div>
                 <div className="card-top">
                   <div className={`file-icon ${cls}`}>
@@ -178,7 +178,7 @@ export function FileExplorer({ files, isLoading, activeDrive, currentPath, setCu
                 onClick={() => navigate(file)}
               >
                 <div className="list-checkbox" onClick={(e) => toggleSelect(file, e)} style={{ marginRight: 12 }}>
-                  <input type="checkbox" checked={selectedFiles.has(file.path)} readOnly />
+                  <input type="checkbox" name={`select-list-${file.id}`} aria-label={`Select ${file.name}`} checked={selectedFiles.has(file.path)} readOnly />
                 </div>
                 <div className={`file-icon ${cls}`} style={{ width: 32, height: 32, overflow: 'hidden' }}>
                   {file.type === 'image' ? (

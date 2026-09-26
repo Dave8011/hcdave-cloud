@@ -97,11 +97,13 @@ export function SettingsModal({ onClose, onSave }) {
         </div>
 
         <div className="field">
-          <label className="field-label">
+          <label className="field-label" htmlFor="agent-url-input">
             <Globe size={12} />
             <span>Home Storage Agent URL</span>
           </label>
           <input
+            id="agent-url-input"
+            name="agentUrl"
             type="url"
             className="field-input"
             value={agentUrl}
