@@ -497,13 +497,21 @@ function processNextThumb() {
   res.setHeader('Cache-Control', `public, max-age=${cacheAge}`);
   
   const readStream = fs.createReadStream(filePath);
-  const transform = sharp().resize(imgWidth, imgHeight, { fit, withoutEnlargement: true }).jpeg({ quality });
+  const transform = sharp({ failOn: 'none', limitInputPixels: false })
+    .rotate() // auto-rotate based on EXIF
+    .resize(imgWidth, imgHeight, { fit, withoutEnlargement: true })
+    .jpeg({ quality });
   
   let finished = false;
   const done = () => {
     if (finished) return;
     finished = true;
     activeThumbs--;
+    
+    // Stop background processing immediately if connection closes
+    try { if (!readStream.destroyed) readStream.destroy(); } catch(_) {}
+    try { transform.destroy(); } catch(_) {}
+    
     processNextThumb();
   };
 
@@ -777,7 +785,9 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
 
     // Step 2: Copy agent files
     try {
+      execSync('cp /opt/hcdave-agent/.env /tmp/.env.backup || true', { stdio: 'ignore' });
       execSync('cp -r agent/. /opt/hcdave-agent/', { cwd: repoDir, stdio: 'ignore' });
+      execSync('cp /tmp/.env.backup /opt/hcdave-agent/.env || true', { stdio: 'ignore' });
     } catch (e) {
       console.error('❌ Copy agent files failed:', e.message);
       return res.status(500).json({ success: false, error: 'Failed to copy agent files', detail: e.message });
