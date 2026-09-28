@@ -11,33 +11,55 @@ const ICON_MAP = {
 };
 
 function ImagePreview({ src, alt }) {
-  const [status, setStatus] = useState('loading'); // loading | loaded | error
+  const [status, setStatus] = useState('loading'); // loading | loaded | error | toolarge
+
+  // Use fetch to detect the HTTP status code before rendering the image,
+  // so we can distinguish "file too large" (413) from a real error
+  React.useEffect(() => {
+    setStatus('loading');
+    fetch(src)
+      .then(r => {
+        if (r.status === 413) { setStatus('toolarge'); }
+        else if (r.status === 504) { setStatus('toolarge'); } // timeout treated same
+        else if (!r.ok) { setStatus('error'); }
+        else { setStatus('loaded'); }
+      })
+      .catch(() => setStatus('error'));
+  }, [src]);
 
   return (
     <div style={{ position: 'relative', width: '100%', minHeight: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       {status === 'loading' && (
-        <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: 'var(--text-3)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: 'var(--text-3)' }}>
           <Loader size={32} style={{ animation: 'spin 1s linear infinite' }} color="var(--cyan)" />
           <span style={{ fontSize: '0.8rem' }}>Processing image…</span>
+        </div>
+      )}
+      {status === 'toolarge' && (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, color: 'var(--text-3)', padding: 24 }}>
+          <AlertCircle size={36} color="var(--amber)" />
+          <span style={{ fontSize: '0.85rem', textAlign: 'center', lineHeight: 1.6 }}>
+            <strong style={{ color: 'var(--text-1)' }}>Image too large to preview</strong><br />
+            DSLR photos and RAW files over 120 MB cannot be previewed<br />
+            to protect server memory. You can still download the file.
+          </span>
         </div>
       )}
       {status === 'error' && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, color: 'var(--text-3)', padding: 24 }}>
           <AlertCircle size={36} color="var(--rose)" />
           <span style={{ fontSize: '0.85rem', textAlign: 'center' }}>
-            Preview unavailable — image may be too large or <code>sharp</code> is not yet installed on the server.
-            <br />Try downloading the file instead.
+            Preview unavailable. Try downloading the file instead.
           </span>
         </div>
       )}
-      <img
-        src={src}
-        alt={alt}
-        className="preview-img"
-        style={{ display: status === 'loaded' ? 'block' : 'none' }}
-        onLoad={() => setStatus('loaded')}
-        onError={() => setStatus('error')}
-      />
+      {status === 'loaded' && (
+        <img
+          src={src}
+          alt={alt}
+          className="preview-img"
+        />
+      )}
     </div>
   );
 }

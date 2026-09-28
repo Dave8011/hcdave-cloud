@@ -493,40 +493,65 @@ function processNextThumb() {
   const { req, res, filePath, imgWidth = 300, imgHeight = 300, quality = 70, fit = 'cover', cacheAge = '86400' } = thumbQueue.shift();
   activeThumbs++;
 
-  res.setHeader('Content-Type', 'image/jpeg');
-  res.setHeader('Cache-Control', `public, max-age=${cacheAge}`);
-  
-  const readStream = fs.createReadStream(filePath);
-  const transform = sharp({ failOn: 'none', limitInputPixels: false })
-    .rotate() // auto-rotate based on EXIF
-    .resize(imgWidth, imgHeight, { fit, withoutEnlargement: true })
-    .jpeg({ quality });
-  
   let finished = false;
   const done = () => {
     if (finished) return;
     finished = true;
     activeThumbs--;
-    
-    // Stop background processing immediately if connection closes
-    try { if (!readStream.destroyed) readStream.destroy(); } catch(_) {}
-    try { transform.destroy(); } catch(_) {}
-    
     processNextThumb();
   };
 
-  res.on('finish', done);
-  res.on('close', done);
-  res.on('error', done);
-  readStream.on('error', (e) => {
-    if (!res.headersSent) res.status(500).end();
+  // Hard timeout: 25 seconds per thumbnail.
+  // DSLR RAWs and large 50MB JPEGs can stall sharp indefinitely on slow CPUs.
+  // Without a timeout the queue slot is never freed and ALL subsequent thumbnails
+  // show a spinning loader forever.
+  const timeout = setTimeout(() => {
+    if (finished) return;
+    console.warn(`⏱ Thumbnail timeout for ${filePath} — releasing queue slot`);
+    try { if (!res.headersSent) res.status(504).end(); } catch (_) {}
+    done();
+  }, 25000);
+
+  // Guard: skip files over 120 MB — sharp would load the whole file into RAM
+  // which crashes the process on 2 GB RAM machines like the Dell Wyse 3040
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > 120 * 1024 * 1024) {
+      clearTimeout(timeout);
+      if (!res.headersSent) res.status(413).end(); // 413 Payload Too Large
+      done();
+      return;
+    }
+  } catch (_) {
+    clearTimeout(timeout);
+    if (!res.headersSent) res.status(404).end();
+    done();
+    return;
+  }
+
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', `public, max-age=${cacheAge}`);
+
+  const readStream = fs.createReadStream(filePath);
+  const transform  = sharp({ limitInputPixels: 268402689 }) // max ~16384×16384 px
+    .resize(imgWidth, imgHeight, { fit, withoutEnlargement: true })
+    .jpeg({ quality });
+
+  res.on('finish', () => { clearTimeout(timeout); done(); });
+  res.on('close',  () => { clearTimeout(timeout); done(); });
+  res.on('error',  () => { clearTimeout(timeout); done(); });
+
+  readStream.on('error', () => {
+    clearTimeout(timeout);
+    try { if (!res.headersSent) res.status(500).end(); } catch (_) {}
     done();
   });
-  transform.on('error', (e) => { 
-    if (!res.headersSent) res.status(500).end();
+  transform.on('error', () => {
+    clearTimeout(timeout);
+    try { if (!res.headersSent) res.status(500).end(); } catch (_) {}
     done();
   });
-  
+
   readStream.pipe(transform).pipe(res);
 }
 
@@ -783,11 +808,18 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
       return res.status(500).json({ success: false, error: 'Git pull failed', detail: pullError });
     }
 
-    // Step 2: Copy agent files
+    // Step 2: Copy agent files — NEVER overwrite .env (has the user's setup password)
+    // and NEVER overwrite shares.json (has all share links).
+    // Use rsync-style exclusion via find+cp to skip those protected files.
     try {
-      execSync('cp /opt/hcdave-agent/.env /tmp/.env.backup || true', { stdio: 'ignore' });
-      execSync('cp -r agent/. /opt/hcdave-agent/', { cwd: repoDir, stdio: 'ignore' });
-      execSync('cp /tmp/.env.backup /opt/hcdave-agent/.env || true', { stdio: 'ignore' });
+      const destDir = '/opt/hcdave-agent';
+      const srcDir  = `${repoDir}/agent`;
+      // Copy everything except .env and shares.json
+      execSync(
+        `find "${srcDir}" -maxdepth 1 -not -name '.env' -not -name 'shares.json' -not -name '.' | xargs -I{} cp -r {} "${destDir}/"`,
+        { stdio: 'ignore' }
+      );
+      console.log('📂 Agent files copied (protected .env and shares.json)');
     } catch (e) {
       console.error('❌ Copy agent files failed:', e.message);
       return res.status(500).json({ success: false, error: 'Failed to copy agent files', detail: e.message });
