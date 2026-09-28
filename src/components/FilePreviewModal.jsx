@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Download, Film, Image as Img, FileText, Archive, Folder, Loader, AlertCircle } from 'lucide-react';
+import { X, Download, Film, Image as Img, FileText, Archive, Folder, Loader, AlertCircle, Database, CheckCircle2 } from 'lucide-react';
 import { StorageService } from '../services/api';
 
 const ICON_MAP = {
@@ -46,9 +46,20 @@ export function FilePreviewModal({ file, driveId, onClose }) {
   if (!file) return null;
 
   const { Icon, color } = ICON_MAP[file.type] || ICON_MAP.document;
+  const [cacheStatus, setCacheStatus] = useState('idle'); // idle | caching | done | error
 
   const handleDownload = () => {
     StorageService.downloadFile(driveId, file.path || file.name, file.name);
+  };
+
+  const handleCache = async () => {
+    setCacheStatus('caching');
+    try {
+      await StorageService.cacheVideo(driveId, file.path || file.name);
+      setCacheStatus('done');
+    } catch (e) {
+      setCacheStatus('error');
+    }
   };
 
   const streamUrl  = file.type === 'video'
@@ -116,8 +127,25 @@ export function FilePreviewModal({ file, driveId, onClose }) {
         {/* Footer */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 4 }}>
           <span style={{ fontSize: '0.78rem', color: 'var(--text-3)' }}>{file.size}</span>
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <button className="btn btn-ghost" onClick={onClose}>Close</button>
+            {file.type === 'video' && (
+              <button
+                className="btn btn-ghost"
+                onClick={handleCache}
+                disabled={cacheStatus === 'caching'}
+                title="Convert and store this video in the fast cache for instant playback"
+                style={{
+                  color: cacheStatus === 'done' ? 'var(--emerald)' : cacheStatus === 'error' ? 'var(--rose)' : 'var(--indigo)',
+                  borderColor: cacheStatus === 'done' ? 'var(--emerald)' : cacheStatus === 'error' ? 'var(--rose)' : undefined,
+                }}
+              >
+                {cacheStatus === 'done' ? <CheckCircle2 size={14} /> : <Database size={14} />}
+                <span>
+                  {cacheStatus === 'caching' ? 'Queued…' : cacheStatus === 'done' ? 'Cached!' : cacheStatus === 'error' ? 'Error' : 'Cache Video'}
+                </span>
+              </button>
+            )}
             <button className="btn btn-primary" onClick={handleDownload}>
               <Download size={16} />
               <span>Download</span>

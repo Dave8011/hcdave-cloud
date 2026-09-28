@@ -34,6 +34,7 @@ export default function App() {
   const [showNewFolder,setShowNewFolder] = useState(false);
   const [showSettings, setShowSettings]= useState(false);
   const [isSidebarOpen, setIsSidebarOpen]= useState(false);
+  const [driveStats, setDriveStats]     = useState([]);
 
   /* Flash helper — show quick D then go somewhere */
   const flashTo = useCallback((target) => {
@@ -46,6 +47,8 @@ export default function App() {
     const list = await StorageService.getDrives();
     setDrives(list);
     if (list.length && !activeDriveId) setActiveDriveId(list[0].id);
+    // Refresh cache drive stats in background
+    StorageService.getCacheStatus().then(cs => setDriveStats(cs.driveStats || [])).catch(() => {});
   }, [activeDriveId]);
 
   const loadFiles = useCallback(async () => {
@@ -153,7 +156,7 @@ export default function App() {
         setActiveDriveId={(id) => { 
           setActiveDriveId(id); 
           setCurrentPath('/'); 
-          setIsSidebarOpen(false); // Auto-close on mobile
+          setIsSidebarOpen(false);
         }}
         activeTab={activeTab}
         setActiveTab={(tab) => {
@@ -161,6 +164,13 @@ export default function App() {
           setIsSidebarOpen(false);
         }}
         isOpen={isSidebarOpen}
+        driveStats={driveStats}
+        onCacheDrive={async (driveId) => {
+          try {
+            await StorageService.startCache([driveId]);
+            setShowSettings(true);
+          } catch (e) { alert('Cache error: ' + e.message); }
+        }}
       />
 
       <main className="main-content">
@@ -215,6 +225,7 @@ export default function App() {
         <SettingsModal
           onClose={() => setShowSettings(false)}
           onSave={() => { loadDrives(); loadFiles(); }}
+          drives={drives}
         />
       )}
     </div>

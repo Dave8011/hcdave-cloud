@@ -397,6 +397,18 @@ function serveFile(req, res) {
 
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
 
+  // ── Cache lookup: serve pre-converted MP4 if available ──────
+  if (req.query.inline === 'true' && VIDEO_EXTS && VIDEO_EXTS.has(path.extname(filePath).toLowerCase())) {
+    try {
+      const cached = getCachedPath(driveId, filePath);
+      if (cached) {
+        req._serveFilePath = cached;
+        filePath = cached;
+      }
+    } catch (_) {}
+  }
+  // ────────────────────────────────────────────────────────────
+
   const stat = fs.statSync(filePath);
   if (stat.isDirectory()) return res.status(400).json({ error: 'Cannot download a directory' });
 
@@ -1004,3 +1016,451 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   CORS:    ${ALLOWED_ORIGIN}`);
   console.log(`   Drives:  scanning /mnt /media /run/media\n`);
 });
+
+/* ═══════════════════════════════════════════════════════════════
+   VIDEO CACHE ENGINE
+   ═══════════════════════════════════════════════════════════════
+   - Converts videos to 720p H.264 MP4 at night or on-demand
+   - Never upscales: preserves original resolution if ≤ 720p
+   - 1 FFmpeg job at a time (Intel Atom safe)
+   - Cache index tracks source mtime+size for auto-invalidation
+   - /api/download checks cache first, falls back to original
+   ═══════════════════════════════════════════════════════════════ */
+
+const { spawn }    = require('child_process');
+const CACHE_VERSION = 1;
+const VIDEO_EXTS    = new Set(['.mp4','.mkv','.avi','.mov','.wmv','.flv','.ts','.m4v','.3gp','.webm','.hevc','.h265','.mpg','.mpeg']);
+
+// Cache config — CACHE_MOUNT comes from .env; defaults to /mnt/hcdave-cache
+const CACHE_MOUNT   = (process.env.CACHE_MOUNT || '/mnt/hcdave-cache').replace(/\/$/, '');
+const CACHE_DIR     = path.join(CACHE_MOUNT, 'hcdave-video-cache');
+const CACHE_INDEX   = path.join(CACHE_DIR, 'cache-index.json');
+const CACHE_WARN_GB = Number(process.env.CACHE_WARNING_GB || 5);
+
+// Job state
+let cacheJob = {
+  running:      false,
+  paused:       false,
+  currentFile:  '',
+  filesTotal:   0,
+  filesDone:    0,
+  ffmpegProc:   null,
+  startedAt:    null,
+  lastError:    '',
+  queue:        [],     // { driveId, sourcePath, destPath, sourceSize, sourceMtime }
+};
+
+// Nightly scheduler state (persisted in memory)
+let nightlySchedule = {
+  enabled:   false,
+  startTime: '02:00',   // HH:MM
+  lastRun:   null,
+};
+
+/* ── Cache Index helpers ─────────────────────────────────────── */
+function readCacheIndex() {
+  try {
+    if (fs.existsSync(CACHE_INDEX)) return JSON.parse(fs.readFileSync(CACHE_INDEX, 'utf8'));
+  } catch (_) {}
+  return {};
+}
+
+function writeCacheIndex(index) {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(CACHE_INDEX, JSON.stringify(index, null, 2));
+  } catch (_) {}
+}
+
+/* ── Check if a cache entry is still valid ───────────────────── */
+function isCacheValid(entry, sourceStat) {
+  if (!entry) return false;
+  if (entry.cacheVersion !== CACHE_VERSION) return false;
+  if (entry.sourceSize !== sourceStat.size) return false;
+  if (Math.abs(entry.sourceMtime - sourceStat.mtimeMs) > 2000) return false;
+  if (!fs.existsSync(entry.destPath)) return false;
+  return true;
+}
+
+/* ── Find cached file for a given source ─────────────────────── */
+function getCachedPath(driveId, sourcePath) {
+  const index = readCacheIndex();
+  const key   = `${driveId}:${sourcePath}`;
+  const entry = index[key];
+  if (!entry) return null;
+  try {
+    const stat = fs.statSync(sourcePath);
+    if (!isCacheValid(entry, stat)) return null;
+    return entry.destPath;
+  } catch (_) {
+    return null;
+  }
+}
+
+/* ── Build list of all videos on selected drives ─────────────── */
+function collectVideos(driveIds) {
+  const drives = getMountedDrives();
+  const items  = [];
+  for (const d of drives) {
+    if (driveIds && driveIds.length > 0 && !driveIds.includes(d.id)) continue;
+    walkDir(d.mount, d.id, items);
+  }
+  return items;
+}
+
+function walkDir(dir, driveId, out) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch (_) { return; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) { walkDir(full, driveId, out); }
+    else if (e.isFile() && VIDEO_EXTS.has(path.extname(e.name).toLowerCase())) {
+      try {
+        const stat = fs.statSync(full);
+        out.push({ driveId, sourcePath: full, sourceSize: stat.size, sourceMtime: stat.mtimeMs });
+      } catch (_) {}
+    }
+  }
+}
+
+/* ── Build cache dest path for a source file ─────────────────── */
+function buildDestPath(driveId, sourcePath) {
+  const hash = crypto.createHash('sha1').update(`${driveId}:${sourcePath}`).digest('hex').slice(0, 12);
+  const base  = path.basename(sourcePath, path.extname(sourcePath));
+  return path.join(CACHE_DIR, driveId, `${base}-${hash}.mp4`);
+}
+
+/* ── FFmpeg: convert one video ───────────────────────────────── */
+function convertVideo(item) {
+  return new Promise((resolve) => {
+    const destDir = path.dirname(item.destPath);
+    try { fs.mkdirSync(destDir, { recursive: true }); } catch (_) {}
+
+    // Probe source height so we never upscale
+    let probeArgs = [
+      '-v', 'quiet', '-print_format', 'json', '-show_streams', item.sourcePath
+    ];
+
+    const probe = spawn('ffprobe', probeArgs);
+    let probeOut = '';
+    probe.stdout.on('data', d => { probeOut += d; });
+    probe.on('close', () => {
+      let scaleFilter = 'scale=-2:min(720\\,ih)'; // never upscale
+      try {
+        const info = JSON.parse(probeOut);
+        const vs   = info.streams?.find(s => s.codec_type === 'video');
+        if (vs && vs.height && vs.height <= 720) scaleFilter = 'scale=-2:ih'; // preserve original
+      } catch (_) {}
+
+      const tmpPath = item.destPath + '.tmp.mp4';
+      const args = [
+        '-y',
+        '-i',   item.sourcePath,
+        '-vf',  scaleFilter,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',   // veryfast = safe for weak CPU
+        '-crf', '26',            // slightly lower quality to reduce file size
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-movflags', '+faststart',
+        '-progress', 'pipe:2',
+        tmpPath
+      ];
+
+      cacheJob.currentFile = path.basename(item.sourcePath);
+      const proc = spawn('ffmpeg', args);
+      cacheJob.ffmpegProc = proc;
+
+      proc.stderr.on('data', () => {}); // absorb ffmpeg progress output
+      proc.on('close', (code) => {
+        cacheJob.ffmpegProc = null;
+        if (code === 0 && fs.existsSync(tmpPath)) {
+          try {
+            fs.renameSync(tmpPath, item.destPath);
+            const cachedSize = fs.statSync(item.destPath).size;
+            const index = readCacheIndex();
+            const key = `${item.driveId}:${item.sourcePath}`;
+            index[key] = {
+              driveId:      item.driveId,
+              sourcePath:   item.sourcePath,
+              sourceSize:   item.sourceSize,
+              sourceMtime:  item.sourceMtime,
+              destPath:     item.destPath,
+              cachedSize,
+              cachedAt:     Date.now(),
+              cacheVersion: CACHE_VERSION,
+            };
+            writeCacheIndex(index);
+          } catch (e) { cacheJob.lastError = e.message; }
+        } else {
+          // Conversion failed — clean up tmp
+          try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
+          if (code !== 0 && !cacheJob.paused) cacheJob.lastError = `FFmpeg exited ${code} for ${path.basename(item.sourcePath)}`;
+        }
+        resolve();
+      });
+
+      proc.on('error', (e) => {
+        cacheJob.ffmpegProc = null;
+        cacheJob.lastError = `FFmpeg error: ${e.message}. Is ffmpeg installed? Run: sudo apt install ffmpeg`;
+        try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
+        resolve();
+      });
+    });
+    probe.on('error', () => {
+      // ffprobe unavailable — still try ffmpeg with default scale
+      resolve();
+    });
+  });
+}
+
+/* ── Main cache runner ───────────────────────────────────────── */
+async function runCacheJob(driveIds, filePaths) {
+  if (cacheJob.running) return;
+
+  // Build queue
+  let items;
+  if (filePaths && filePaths.length > 0) {
+    // Single-file or explicit list
+    const index = readCacheIndex();
+    items = [];
+    const drives = getMountedDrives();
+    for (const fp of filePaths) {
+      const [driveId, sourcePath] = fp.split('::');
+      const drive = drives.find(d => d.id === driveId);
+      if (!drive) continue;
+      try {
+        const stat = fs.statSync(sourcePath);
+        const key  = `${driveId}:${sourcePath}`;
+        if (!isCacheValid(index[key], stat)) {
+          items.push({ driveId, sourcePath, sourceSize: stat.size, sourceMtime: stat.mtimeMs, destPath: buildDestPath(driveId, sourcePath) });
+        }
+      } catch (_) {}
+    }
+  } else {
+    // Scan drives
+    const index = readCacheIndex();
+    const all   = collectVideos(driveIds);
+    items = all.filter(v => {
+      try {
+        const stat = fs.statSync(v.sourcePath);
+        const key  = `${v.driveId}:${v.sourcePath}`;
+        return !isCacheValid(index[key], stat);
+      } catch (_) { return false; }
+    }).map(v => ({ ...v, destPath: buildDestPath(v.driveId, v.sourcePath) }));
+  }
+
+  if (items.length === 0) {
+    console.log('📦 Cache: all videos already cached.');
+    return;
+  }
+
+  cacheJob.running    = true;
+  cacheJob.paused     = false;
+  cacheJob.queue      = items;
+  cacheJob.filesTotal = items.length;
+  cacheJob.filesDone  = 0;
+  cacheJob.lastError  = '';
+  cacheJob.startedAt  = Date.now();
+  nightlySchedule.lastRun = new Date().toISOString();
+
+  console.log(`📦 Cache: starting job — ${items.length} video(s) to process`);
+
+  for (let i = 0; i < items.length; i++) {
+    if (!cacheJob.running) break;
+    // Wait if paused
+    while (cacheJob.paused && cacheJob.running) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    if (!cacheJob.running) break;
+
+    cacheJob.filesDone = i;
+    await convertVideo(items[i]);
+  }
+
+  cacheJob.running     = false;
+  cacheJob.currentFile = '';
+  cacheJob.filesDone   = cacheJob.filesTotal;
+  console.log('✅ Cache: job complete');
+}
+
+/* ── Cache stats helper ──────────────────────────────────────── */
+function getCacheStats() {
+  const index  = readCacheIndex();
+  const drives = getMountedDrives();
+  let freeGB   = null;
+
+  try {
+    // df -BG to get free space on cache mount
+    const dfOut = execSync(`df -BG "${CACHE_MOUNT}" | tail -1`, { encoding: 'utf8' });
+    const parts = dfOut.trim().split(/\s+/);
+    if (parts[3]) freeGB = parseInt(parts[3], 10);
+  } catch (_) {}
+
+  // Build per-drive cache stats
+  const driveStats = {};
+  for (const d of drives) {
+    driveStats[d.id] = { driveId: d.id, name: d.name, total: 0, cached: 0 };
+  }
+
+  // Count total videos per drive
+  for (const d of drives) {
+    const all = [];
+    walkDir(d.mount, d.id, all);
+    driveStats[d.id].total = all.length;
+  }
+
+  // Count cached
+  let totalCachedFiles = 0;
+  let totalCachedBytes = 0;
+  const cachedList = [];
+
+  for (const [key, entry] of Object.entries(index)) {
+    // Validate entry is still current
+    try {
+      const stat = fs.statSync(entry.sourcePath);
+      if (!isCacheValid(entry, stat)) continue;
+    } catch (_) { continue; }
+
+    if (driveStats[entry.driveId]) driveStats[entry.driveId].cached++;
+    totalCachedFiles++;
+    totalCachedBytes += entry.cachedSize || 0;
+    cachedList.push({
+      name:       path.basename(entry.sourcePath),
+      driveId:    entry.driveId,
+      sourcePath: entry.sourcePath,
+      cachedSize: entry.cachedSize,
+      cachedAt:   entry.cachedAt,
+    });
+  }
+
+  const cacheMountExists = fs.existsSync(CACHE_MOUNT);
+  const warn = freeGB !== null && freeGB < CACHE_WARN_GB;
+
+  return {
+    cacheMountExists,
+    cacheMount:   CACHE_MOUNT,
+    freeGB,
+    warn,
+    warnThresholdGB: CACHE_WARN_GB,
+    totalCachedFiles,
+    totalCachedGB:   +(totalCachedBytes / 1e9).toFixed(2),
+    driveStats:   Object.values(driveStats),
+    cachedList,
+    job: {
+      running:     cacheJob.running,
+      paused:      cacheJob.paused,
+      currentFile: cacheJob.currentFile,
+      filesTotal:  cacheJob.filesTotal,
+      filesDone:   cacheJob.filesDone,
+      startedAt:   cacheJob.startedAt,
+      lastError:   cacheJob.lastError,
+    },
+    nightlySchedule: {
+      enabled:   nightlySchedule.enabled,
+      startTime: nightlySchedule.startTime,
+      lastRun:   nightlySchedule.lastRun,
+    },
+  };
+}
+
+/* ── Nightly cron (checks every minute) ─────────────────────── */
+setInterval(() => {
+  if (!nightlySchedule.enabled) return;
+  const now  = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  if (hhmm !== nightlySchedule.startTime) return;
+  // Prevent double-firing in same minute
+  const lastRun = nightlySchedule.lastRun ? new Date(nightlySchedule.lastRun) : null;
+  if (lastRun && (Date.now() - lastRun.getTime()) < 60000) return;
+  console.log(`⏰ Nightly cache job triggered at ${hhmm}`);
+  runCacheJob([], []).catch(console.error);
+}, 60000);
+
+/* ── Cache API endpoints ─────────────────────────────────────── */
+
+// GET /api/cache/status
+app.get('/api/cache/status', rateLimitAuth, auth, (req, res) => {
+  res.json(getCacheStats());
+});
+
+// GET /api/cache/progress
+app.get('/api/cache/progress', rateLimitAuth, auth, (req, res) => {
+  const pct = cacheJob.filesTotal > 0
+    ? Math.round((cacheJob.filesDone / cacheJob.filesTotal) * 100)
+    : 0;
+  res.json({
+    running:     cacheJob.running,
+    paused:      cacheJob.paused,
+    currentFile: cacheJob.currentFile,
+    filesTotal:  cacheJob.filesTotal,
+    filesDone:   cacheJob.filesDone,
+    percentDone: pct,
+    lastError:   cacheJob.lastError,
+  });
+});
+
+// POST /api/cache/start  body: { driveIds?: string[], filePaths?: string[] }
+app.post('/api/cache/start', rateLimitAuth, auth, (req, res) => {
+  if (cacheJob.running && !cacheJob.paused) {
+    return res.status(409).json({ error: 'Cache job already running' });
+  }
+  if (cacheJob.paused) {
+    cacheJob.paused = false;
+    return res.json({ success: true, message: 'Cache job resumed' });
+  }
+  const { driveIds = [], filePaths = [] } = req.body || {};
+  // Run async — don't await
+  runCacheJob(driveIds, filePaths).catch(e => {
+    cacheJob.lastError = e.message;
+    cacheJob.running   = false;
+  });
+  res.json({ success: true, message: 'Cache job started' });
+});
+
+// POST /api/cache/pause
+app.post('/api/cache/pause', rateLimitAuth, auth, (req, res) => {
+  if (!cacheJob.running) return res.status(409).json({ error: 'No job running' });
+  cacheJob.paused = true;
+  // Kill current ffmpeg process gracefully (it will be retried next time)
+  if (cacheJob.ffmpegProc) {
+    try { cacheJob.ffmpegProc.kill('SIGTERM'); } catch (_) {}
+  }
+  res.json({ success: true, message: 'Cache job paused' });
+});
+
+// POST /api/cache/stop
+app.post('/api/cache/stop', rateLimitAuth, auth, (req, res) => {
+  cacheJob.running = false;
+  cacheJob.paused  = false;
+  if (cacheJob.ffmpegProc) {
+    try { cacheJob.ffmpegProc.kill('SIGTERM'); } catch (_) {}
+    cacheJob.ffmpegProc = null;
+  }
+  res.json({ success: true, message: 'Cache job stopped' });
+});
+
+// POST /api/cache/schedule  body: { enabled, startTime }
+app.post('/api/cache/schedule', rateLimitAuth, auth, (req, res) => {
+  const { enabled, startTime } = req.body || {};
+  if (typeof enabled === 'boolean') nightlySchedule.enabled = enabled;
+  if (startTime && /^\d{2}:\d{2}$/.test(startTime)) nightlySchedule.startTime = startTime;
+  res.json({ success: true, schedule: nightlySchedule });
+});
+
+// POST /api/cache/invalidate  body: { driveId, sourcePath }
+app.post('/api/cache/invalidate', rateLimitAuth, auth, (req, res) => {
+  const { driveId, sourcePath } = req.body || {};
+  if (!driveId || !sourcePath) return res.status(400).json({ error: 'driveId and sourcePath required' });
+  const index = readCacheIndex();
+  const key   = `${driveId}:${sourcePath}`;
+  const entry = index[key];
+  if (entry) {
+    try { if (fs.existsSync(entry.destPath)) fs.unlinkSync(entry.destPath); } catch (_) {}
+    delete index[key];
+    writeCacheIndex(index);
+  }
+  res.json({ success: true });
+});
+

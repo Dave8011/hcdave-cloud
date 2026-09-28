@@ -281,4 +281,56 @@ export class StorageService {
     form.submit();
     document.body.removeChild(form);
   }
+
+  // ── Cache API ────────────────────────────────────────────────
+
+  static async getCacheStatus() {
+    const r = await fetch(`${this.getAgentUrl()}/api/cache/status`, { headers: this.headers() });
+    if (!r.ok) throw new Error('Cache status unavailable');
+    return r.json();
+  }
+
+  static async getCacheProgress() {
+    const r = await fetch(`${this.getAgentUrl()}/api/cache/progress`, { headers: this.headers() });
+    if (!r.ok) throw new Error('Cache progress unavailable');
+    return r.json();
+  }
+
+  static async startCache(driveIds = [], filePaths = []) {
+    const r = await fetch(`${this.getAgentUrl()}/api/cache/start`, {
+      method: 'POST', headers: this.headers(),
+      body: JSON.stringify({ driveIds, filePaths }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to start cache');
+    return data;
+  }
+
+  static async pauseCache() {
+    const r = await fetch(`${this.getAgentUrl()}/api/cache/pause`, { method: 'POST', headers: this.headers() });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to pause');
+    return data;
+  }
+
+  static async stopCache() {
+    const r = await fetch(`${this.getAgentUrl()}/api/cache/stop`, { method: 'POST', headers: this.headers() });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to stop');
+    return data;
+  }
+
+  static async setCacheSchedule(enabled, startTime) {
+    const r = await fetch(`${this.getAgentUrl()}/api/cache/schedule`, {
+      method: 'POST', headers: this.headers(),
+      body: JSON.stringify({ enabled, startTime }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to update schedule');
+    return data;
+  }
+
+  static async cacheVideo(driveId, sourcePath) {
+    return this.startCache([], [`${driveId}::${sourcePath}`]);
+  }
 }

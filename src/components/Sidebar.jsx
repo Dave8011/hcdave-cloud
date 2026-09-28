@@ -1,7 +1,7 @@
 import React from 'react';
-import { HardDrive, Cpu, Folder, Clock, Star, ShieldCheck, Wifi, PlugZap } from 'lucide-react';
+import { HardDrive, Cpu, Folder, Clock, Star, ShieldCheck, Wifi, PlugZap, Database } from 'lucide-react';
 
-export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, setActiveTab, isOpen }) {
+export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, setActiveTab, isOpen, onCacheDrive, driveStats }) {
   return (
     <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}>
       <div>
@@ -73,6 +73,27 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
                     <span>{drive.usedGB} GB used</span>
                     <span>{drive.freeGB} GB free · {drive.totalGB} GB</span>
                   </div>
+
+                  {/* Cache stats + button */}
+                  {(() => {
+                    const ds = driveStats?.find(d => d.driveId === drive.id);
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-3)' }}>
+                          {ds ? `${ds.cached}/${ds.total} cached` : 'Cache: —'}
+                        </span>
+                        {onCacheDrive && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onCacheDrive(drive.id); }}
+                            style={{ fontSize: '0.68rem', display: 'flex', alignItems: 'center', gap: 3, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 4, padding: '2px 7px', color: 'var(--indigo)', cursor: 'pointer', fontWeight: 600 }}
+                            title="Cache all videos on this drive"
+                          >
+                            <Database size={10} /> Cache Drive
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })
