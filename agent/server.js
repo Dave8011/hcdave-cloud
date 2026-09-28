@@ -57,7 +57,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.2.5${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.3.0${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -407,7 +407,7 @@ function serveFile(req, res) {
   const baseHeaders = {
     'Accept-Ranges':   'bytes',
     'Content-Type':    mime,
-    'Cache-Control':   'no-transform, private, no-store',
+    'Cache-Control':   'no-transform, private',
     'Last-Modified':   stat.mtime.toUTCString(),
   };
 
@@ -748,27 +748,50 @@ app.put('/api/share/:token', rateLimitAuth, auth, (req, res) => {
 // POST /api/update (Update Agent Software via Git)
 app.post('/api/update', rateLimitAuth, auth, (req, res) => {
   try {
-    // 1. Send success response first so the frontend knows it started
-    res.json({ success: true, message: 'Update started. Agent will restart in a few seconds.' });
-    
-    // 2. Perform the git pull and restart after a small delay
+    const repoDir = '/home/root1/hcdave-cloud';
+    let pullOutput = '';
+    let pullError = '';
+
+    // Step 1: Run git pull synchronously so we can report the actual result
+    try {
+      execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
+      pullOutput = execSync('git reset --hard HEAD && git pull --rebase=false', { cwd: repoDir, encoding: 'utf8' }).trim();
+      console.log('📥 Git pull output:', pullOutput);
+    } catch (e) {
+      pullError = e.stderr?.toString() || e.message;
+      console.error('❌ Git pull failed:', pullError);
+      return res.status(500).json({ success: false, error: 'Git pull failed', detail: pullError });
+    }
+
+    // Step 2: Copy agent files
+    try {
+      execSync('cp -r agent/. /opt/hcdave-agent/', { cwd: repoDir, stdio: 'ignore' });
+    } catch (e) {
+      console.error('❌ Copy agent files failed:', e.message);
+      return res.status(500).json({ success: false, error: 'Failed to copy agent files', detail: e.message });
+    }
+
+    // Step 3: Tell the frontend update was pulled successfully before restarting
+    const alreadyUpToDate = pullOutput.includes('Already up to date');
+    res.json({
+      success: true,
+      message: alreadyUpToDate
+        ? 'Already up to date. Restarting to apply any config changes.'
+        : `Updated successfully. Restarting agent…\n${pullOutput}`,
+      pullOutput,
+    });
+
+    // Step 4: Install deps and restart after response is flushed
     setTimeout(() => {
       try {
-        console.log('🔄 Executing update...');
-        const repoDir = '/home/root1/hcdave-cloud';
-        execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
-        execSync('git reset --hard HEAD && git pull', { cwd: repoDir, stdio: 'ignore' });
-        execSync('cp -r agent/* /opt/hcdave-agent/', { cwd: repoDir, stdio: 'ignore' });
-        
         console.log('📦 Installing dependencies...');
         execSync('npm install --omit=dev', { cwd: '/opt/hcdave-agent', stdio: 'ignore' });
-
         console.log('🔄 Restarting service...');
         execSync('systemctl restart hcdave-agent', { stdio: 'ignore' });
       } catch (e) {
-        console.error('Update failed:', e);
+        console.error('❌ Post-update restart failed:', e.message);
       }
-    }, 2000);
+    }, 500);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -857,7 +880,7 @@ function streamFile(fullPath, req, res) {
   const baseHeaders = {
     'Accept-Ranges': 'bytes',
     'Content-Type': mime,
-    'Cache-Control': 'no-transform, private, no-store',
+    'Cache-Control': 'no-transform, private',
     'Last-Modified': stat.mtime.toUTCString(),
   };
 

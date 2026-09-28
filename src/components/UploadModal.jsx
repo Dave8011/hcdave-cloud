@@ -1,6 +1,46 @@
 import React, { useState, useRef } from 'react';
-import { X, UploadCloud, CheckCircle2, File as FileIcon } from 'lucide-react';
+import { X, UploadCloud, CheckCircle2, File as FileIcon, Folder } from 'lucide-react';
 import { StorageService } from '../services/api';
+
+// Recursively collect all File objects from a DataTransferItem entry (folder or file)
+async function collectFilesFromEntry(entry, pathPrefix = '') {
+  return new Promise((resolve) => {
+    if (entry.isFile) {
+      entry.file((file) => {
+        Object.defineProperty(file, '_relativePath', { value: pathPrefix + file.name, writable: false, configurable: true });
+        resolve([file]);
+      }, () => resolve([]));
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const allEntries = [];
+      const readBatch = () => {
+        reader.readEntries(async (batch) => {
+          if (!batch.length) {
+            const nested = await Promise.all(
+              allEntries.map(e => collectFilesFromEntry(e, pathPrefix + entry.name + '/'))
+            );
+            resolve(nested.flat());
+          } else {
+            allEntries.push(...batch);
+            readBatch();
+          }
+        }, () => resolve([]));
+      };
+      readBatch();
+    } else {
+      resolve([]);
+    }
+  });
+}
+
+// Get the upload sub-path from a file's relative path (strip filename, keep dirs)
+function getSubPath(file, basePath) {
+  const rel = file._relativePath || file.webkitRelativePath || '';
+  if (!rel || !rel.includes('/')) return basePath || '/';
+  const dirPart = rel.substring(0, rel.lastIndexOf('/'));
+  const base = (basePath || '/').replace(/\/$/, '');
+  return `${base}/${dirPart}`;
+}
 
 export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplete }) {
   const [files, setFiles] = useState([]);
@@ -10,17 +50,32 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
   const [dragging, setDragging] = useState(false);
   const [currentFileName, setCurrentFileName] = useState('');
   const [uploadError, setUploadError] = useState('');
-  const inputRef = useRef();
+  const fileInputRef = useRef();
+  const folderInputRef = useRef();
 
-  const addFiles = (incoming) => {
-    const arr = Array.from(incoming);
-    setFiles((prev) => [...prev, ...arr]);
+  const addFlatFiles = (incoming) => {
+    setFiles(prev => [...prev, ...Array.from(incoming)]);
   };
 
-  const handleDrop = (e) => {
+  const handleDrop = async (e) => {
     e.preventDefault();
     setDragging(false);
-    addFiles(e.dataTransfer.files);
+    const items = e.dataTransfer?.items;
+    if (items && items.length > 0) {
+      const entries = Array.from(items)
+        .map(item => item.webkitGetAsEntry?.() || null)
+        .filter(Boolean);
+      if (entries.length > 0) {
+        const allFiles = (await Promise.all(entries.map(e => collectFilesFromEntry(e, '')))).flat();
+        setFiles(prev => [...prev, ...allFiles]);
+        return;
+      }
+    }
+    addFlatFiles(e.dataTransfer.files);
+  };
+
+  const handleFolderInput = (e) => {
+    setFiles(prev => [...prev, ...Array.from(e.target.files)]);
   };
 
   const handleUpload = async () => {
@@ -30,14 +85,46 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
     setUploadError('');
 
     try {
+      // Collect all unique subdirectories needed
+      const subPaths = new Set();
+      for (const file of files) {
+        const rel = file._relativePath || file.webkitRelativePath || '';
+        if (rel.includes('/')) {
+          const dirPart = rel.substring(0, rel.lastIndexOf('/'));
+          const parts = dirPart.split('/');
+          let cumulative = (currentPath || '/').replace(/\/$/, '');
+          for (const part of parts) {
+            if (!part) continue;
+            cumulative = `${cumulative}/${part}`;
+            subPaths.add(cumulative);
+          }
+        }
+      }
+
+      // Create directories shallowest-first
+      const sortedPaths = Array.from(subPaths).sort((a, b) => a.split('/').length - b.split('/').length);
+      for (const sp of sortedPaths) {
+        const parent = sp.substring(0, sp.lastIndexOf('/')) || '/';
+        const folderName = sp.substring(sp.lastIndexOf('/') + 1);
+        if (folderName) {
+          try {
+            await StorageService.createFolder(activeDrive.id, parent, folderName);
+          } catch (e) {
+            if (!e.message?.includes('already exists')) throw e;
+          }
+        }
+      }
+
+      // Upload all files to their correct paths
       for (let i = 0; i < files.length; i++) {
-        setCurrentFileName(files[i].name);
+        const file = files[i];
+        setCurrentFileName(file.name);
+        const destPath = getSubPath(file, currentPath || '/');
         await StorageService.uploadFile(
           activeDrive.id,
-          files[i],
-          currentPath || '/',
+          file,
+          destPath,
           (p) => {
-            // p is 0-100 for the current file; scale across all files
             const overall = Math.round(((i + p / 100) / files.length) * 100);
             setProgress(overall);
           }
@@ -54,18 +141,25 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
     setTimeout(() => { onUploadComplete(); onClose(); }, 1400);
   };
 
+  const folderFileCount = files.filter(f => (f._relativePath || f.webkitRelativePath || '').includes('/')).length;
+  const uniqueFolders = new Set(files.map(f => {
+    const rel = f._relativePath || f.webkitRelativePath || '';
+    return rel.includes('/') ? rel.split('/')[0] : '';
+  }).filter(Boolean)).size;
+
+  const selectionLabel = files.length === 0
+    ? 'Click or drag & drop files or folders here'
+    : folderFileCount > 0
+    ? `${files.length} file(s) in ${uniqueFolders || 1} folder(s) selected`
+    : `${files.length} file(s) selected`;
+
   return (
     <div className="modal-overlay" onClick={!uploading ? onClose : undefined}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title-row">
-          <div className="modal-title">
-            Upload to {activeDrive?.name || 'Drive'}
-          </div>
+          <div className="modal-title">Upload to {activeDrive?.name || 'Drive'}</div>
           {!uploading && (
-            <button
-              onClick={onClose}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4, display: 'flex' }}
-            >
+            <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4, display: 'flex' }}>
               <X size={20} />
             </button>
           )}
@@ -77,84 +171,70 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
             <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>
               {files.length} file{files.length > 1 ? 's' : ''} uploaded!
             </div>
-            <div style={{ color: 'var(--text-3)', fontSize: '0.85rem', marginTop: 4 }}>
-              Saved to {activeDrive?.name}
-            </div>
+            <div style={{ color: 'var(--text-3)', fontSize: '0.85rem', marginTop: 4 }}>Saved to {activeDrive?.name}</div>
           </div>
         ) : (
           <>
-            {/* Drop Zone */}
             <div
               className={`drop-zone ${dragging ? 'drag-over' : ''}`}
-              onClick={() => inputRef.current?.click()}
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
               onDrop={handleDrop}
             >
-              <input
-                ref={inputRef}
-                type="file"
-                multiple
-                style={{ display: 'none' }}
-                onChange={(e) => addFiles(e.target.files)}
-              />
+              <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => addFlatFiles(e.target.files)} />
+              <input ref={folderInputRef} type="file" webkitdirectory="true" multiple style={{ display: 'none' }} onChange={handleFolderInput} />
               <UploadCloud size={40} color="var(--indigo)" style={{ marginBottom: 10 }} />
-              <div className="drop-title">
-                {files.length ? `${files.length} file(s) selected` : 'Click or drag & drop files here'}
-              </div>
-              <div className="drop-sub">
-                Photos, videos, documents, ISOs — any file type
+              <div className="drop-title">{selectionLabel}</div>
+              <div className="drop-sub" style={{ marginBottom: 14 }}>Drag & drop files or entire folders — structure is preserved</div>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                <button className="btn btn-ghost" style={{ fontSize: '0.82rem', padding: '6px 14px' }} onClick={() => fileInputRef.current?.click()} type="button">
+                  <FileIcon size={14} /><span>Select Files</span>
+                </button>
+                <button className="btn btn-ghost" style={{ fontSize: '0.82rem', padding: '6px 14px' }} onClick={() => folderInputRef.current?.click()} type="button">
+                  <Folder size={14} /><span>Select Folder</span>
+                </button>
               </div>
             </div>
 
-            {/* File list */}
             {files.length > 0 && !uploading && (
               <div style={{ maxHeight: 140, overflowY: 'auto', marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {files.map((f, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', padding: '6px 10px', background: 'var(--bg-card)', borderRadius: 'var(--r-xs)' }}>
-                    <FileIcon size={14} color="var(--text-3)" />
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-                    <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{(f.size / (1024 * 1024)).toFixed(1)} MB</span>
-                  </div>
-                ))}
+                {files.map((f, i) => {
+                  const rel = f._relativePath || f.webkitRelativePath || f.name;
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', padding: '6px 10px', background: 'var(--bg-card)', borderRadius: 'var(--r-xs)' }}>
+                      <FileIcon size={14} color="var(--text-3)" />
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rel}</span>
+                      <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{(f.size / (1024 * 1024)).toFixed(1)} MB</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
             {uploading && (
               <div className="upload-progress">
                 <div className="upload-progress-label">
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
-                    {currentFileName || 'Uploading…'}
-                  </span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{currentFileName || 'Uploading…'}</span>
                   <span>{progress}%</span>
                 </div>
-                <div className="prog-bg">
-                  <div className="prog-fill" style={{ width: `${progress}%` }} />
-                </div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', marginTop: 6 }}>
-                  Files are sent in 50 MB chunks to stay within network limits.
-                </div>
+                <div className="prog-bg"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', marginTop: 6 }}>Uploading in 50 MB chunks — folder structure is preserved.</div>
               </div>
             )}
 
             {uploadError && (
-              <div style={{ fontSize: '0.82rem', color: 'var(--rose)', marginBottom: 12 }}>
-                ⚠ {uploadError}
-              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--rose)', marginBottom: 12 }}>⚠ {uploadError}</div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <button className="btn btn-ghost" onClick={onClose} disabled={uploading}>
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleUpload}
-                disabled={!files.length || uploading}
-              >
-                {uploading ? <div className="spinner" /> : <UploadCloud size={16} />}
-                <span>{uploading ? 'Uploading…' : 'Upload All'}</span>
-              </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+              <button className="btn btn-ghost" style={{ fontSize: '0.78rem' }} onClick={() => setFiles([])} disabled={!files.length || uploading}>Clear</button>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn btn-ghost" onClick={onClose} disabled={uploading}>Cancel</button>
+                <button className="btn btn-primary" onClick={handleUpload} disabled={!files.length || uploading}>
+                  {uploading ? <div className="spinner" /> : <UploadCloud size={16} />}
+                  <span>{uploading ? 'Uploading…' : `Upload${files.length ? ` (${files.length})` : ''}`}</span>
+                </button>
+              </div>
             </div>
           </>
         )}

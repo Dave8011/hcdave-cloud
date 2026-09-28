@@ -220,15 +220,35 @@ export class StorageService {
     return `${this.getDownloadUrl(driveId, filePath)}&inline=true&token=${encodeURIComponent(this.getToken())}`;
   }
 
-  // Trigger browser download directly without fetch to avoid CORS and RAM limits
-  static downloadFile(driveId, filePath, fileName) {
+  // Trigger browser download using fetch so the Authorization header is sent.
+  // For large files, stream the response body into a Blob and create a transient
+  // object URL — this bypasses Cloudflare's no-download policy on plain links
+  // and gives proper progress feedback through the browser's native download manager.
+  static async downloadFile(driveId, filePath, fileName) {
     const url = `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getToken())}`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${this.getToken()}` },
+      });
+      if (!response.ok) throw new Error(`Server returned ${response.status}`);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30000);
+    } catch (err) {
+      // Fallback to plain link if fetch fails (e.g. CORS, network error)
+      const a = document.createElement('a');
+      a.href = `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getToken())}`;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
   }
 
   static getThumbnailUrl(driveId, filePath) {
