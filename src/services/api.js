@@ -55,6 +55,9 @@ export class StorageService {
       }
       if (!r.ok) throw new Error('Agent offline');
       const data = await r.json();
+      if (data.publicToken) {
+        localStorage.setItem('HCDAVE_PUBLIC_TOKEN', data.publicToken);
+      }
       return data.drives || [];
     } catch {
       return [];
@@ -210,6 +213,10 @@ export class StorageService {
     return data;
   }
 
+  static getPublicToken() {
+    return localStorage.getItem('HCDAVE_PUBLIC_TOKEN') || this.getToken();
+  }
+
   // Build a secure download URL
   static getDownloadUrl(driveId, filePath) {
     return `${this.getAgentUrl()}/api/download?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}`;
@@ -217,7 +224,7 @@ export class StorageService {
 
   // Build a stream URL with the token embedded for <img> and <video> tags
   static getStreamUrl(driveId, filePath) {
-    return `${this.getDownloadUrl(driveId, filePath)}&inline=true&token=${encodeURIComponent(this.getToken())}`;
+    return `${this.getDownloadUrl(driveId, filePath)}&inline=true&token=${encodeURIComponent(this.getPublicToken())}`;
   }
 
   // Trigger browser download using fetch so the Authorization header is sent.
@@ -225,7 +232,7 @@ export class StorageService {
   // object URL — this bypasses Cloudflare's no-download policy on plain links
   // and gives proper progress feedback through the browser's native download manager.
   static async downloadFile(driveId, filePath, fileName) {
-    const url = `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getToken())}`;
+    const url = `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getPublicToken())}`;
     try {
       const response = await fetch(url, {
         headers: { Authorization: `Bearer ${this.getToken()}` },
@@ -243,7 +250,7 @@ export class StorageService {
     } catch (err) {
       // Fallback to plain link if fetch fails (e.g. CORS, network error)
       const a = document.createElement('a');
-      a.href = `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getToken())}`;
+      a.href = `${this.getDownloadUrl(driveId, filePath)}&token=${encodeURIComponent(this.getPublicToken())}`;
       a.download = fileName;
       document.body.appendChild(a);
       a.click();
@@ -252,17 +259,17 @@ export class StorageService {
   }
 
   static getThumbnailUrl(driveId, filePath) {
-    return `${this.getAgentUrl()}/api/thumbnail?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(this.getToken())}`;
+    return `${this.getAgentUrl()}/api/thumbnail?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(this.getPublicToken())}`;
   }
 
   static getPreviewUrl(driveId, filePath) {
-    return `${this.getAgentUrl()}/api/thumbnail?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}&size=preview&token=${encodeURIComponent(this.getToken())}`;
+    return `${this.getAgentUrl()}/api/thumbnail?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(filePath)}&size=preview&token=${encodeURIComponent(this.getPublicToken())}`;
   }
 
   static downloadZip(driveId, paths) {
     const form = document.createElement('form');
     form.method = 'POST';
-    form.action = `${this.getAgentUrl()}/api/download-zip?token=${encodeURIComponent(this.getToken())}`;
+    form.action = `${this.getAgentUrl()}/api/download-zip?token=${encodeURIComponent(this.getPublicToken())}`;
     form.style.display = 'none';
 
     const driveInput = document.createElement('input');

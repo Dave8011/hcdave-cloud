@@ -506,6 +506,8 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
             <span className="fab-btn-label">Zip</span>
           </button>
 
+          <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.2)', marginLeft: 8, marginRight: 8 }} />
+
           <button
             className="fab-btn fab-delete"
             onClick={promptDeleteSelected}

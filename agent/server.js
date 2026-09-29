@@ -129,7 +129,10 @@ function auth(req, res, next) {
     return res.status(401).json({ error: 'Authorization required' });
   }
 
-  if (token !== AUTH_PASSWORD) {
+  const hashedPass = crypto.createHash('md5').update(AUTH_PASSWORD).digest('hex');
+
+  // Allow raw password OR hashed password (for public URLs) OR temp share token
+  if (token !== AUTH_PASSWORD && token !== hashedPass && !tempTokens.has(token)) {
     recordFailure(req._ip || 'unknown', req._entry || { count: 0, blockUntil: 0 });
     return res.status(403).json({ error: 'Invalid password' });
   }
@@ -326,7 +329,8 @@ app.get('/health', (_, res) => {
 // GET /api/drives
 app.get('/api/drives', rateLimitAuth, auth, (_, res) => {
   const drives = getMountedDrives();
-  res.json({ status: 'online', domain: 'hcdavecloud.in', drivesCount: drives.length, drives });
+  const publicToken = crypto.createHash('md5').update(AUTH_PASSWORD).digest('hex');
+  res.json({ status: 'online', domain: 'hcdavecloud.in', drivesCount: drives.length, drives, publicToken });
 });
 
 // GET /api/files
@@ -355,6 +359,10 @@ app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
       const batchResults = await Promise.all(batch.map(async (dirent, index) => {
         try {
           const name = dirent.name;
+          // Hide macOS / Windows system folders to avoid clutter
+          if (['.fseventsd', '.Spotlight-V100', '.Trashes', 'System Volume Information', '$RECYCLE.BIN'].includes(name)) {
+            return null;
+          }
           const isDir = dirent.isDirectory();
           const type  = getFileType(name, isDir);
           const relPath = path.join(req.query.path || '/', name);
@@ -611,7 +619,9 @@ app.post('/api/download-zip', rateLimitAuth, auth, (req, res) => {
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="hcdave_cloud_download.zip"');
 
-  const archive = archiver('zip', { zlib: { level: 1 } });
+  // Set zlib level: 0 (store only) because CPU is the bottleneck on Atom processors, not network.
+  // This drastically speeds up zip downloads over local/tunnel connections.
+  const archive = archiver('zip', { zlib: { level: 0 } });
   archive.on('error', (err) => { console.error(err); res.status(500).end(); });
   archive.pipe(res);
 
