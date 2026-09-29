@@ -306,12 +306,20 @@ const multerStorage = multer.diskStorage({
 });
 const upload = multer({ storage: multerStorage, limits: { fileSize: 50 * 1024 * 1024 * 1024 } }); // 50 GB max
 
-// Separate multer instance for chunk pieces — memory storage, max 55 MB per chunk
+// Separate multer instance for chunk pieces — disk storage
 const CHUNK_TMP_DIR = '/tmp/hcdave-chunks';
 try { fs.mkdirSync(CHUNK_TMP_DIR, { recursive: true }); } catch (_) {}
 
+const chunkStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, CHUNK_TMP_DIR),
+  filename: (req, file, cb) => {
+    // uploadId and chunkIndex must be in req.body (appended before the file in FormData)
+    cb(null, `${req.body.uploadId}-${req.body.chunkIndex}`);
+  }
+});
+
 const chunkUpload = multer({
-  storage: multer.memoryStorage(),
+  storage: chunkStorage,
   limits: { fileSize: 55 * 1024 * 1024 },
 });
 
@@ -664,8 +672,7 @@ app.post('/api/upload-chunk', rateLimitAuth, auth, chunkUpload.single('chunk'), 
     if (!uploadId || chunkIndex === undefined || !req.file) {
       return res.status(400).json({ error: 'Missing uploadId, chunkIndex or chunk data' });
     }
-    const tmpPath = path.join(CHUNK_TMP_DIR, `${uploadId}-${chunkIndex}`);
-    fs.writeFileSync(tmpPath, req.file.buffer);
+    // Multer's diskStorage has already written the file to CHUNK_TMP_DIR
     res.json({ success: true, chunkIndex: Number(chunkIndex) });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -697,8 +704,14 @@ app.post('/api/upload-complete', rateLimitAuth, auth, async (req, res) => {
         writeStream.destroy();
         return res.status(400).json({ error: `Missing chunk ${i}` });
       }
-      const data = fs.readFileSync(chunkPath);
-      writeStream.write(data);
+      
+      await new Promise((resolve, reject) => {
+        const readStream = fs.createReadStream(chunkPath);
+        readStream.pipe(writeStream, { end: false });
+        readStream.on('end', resolve);
+        readStream.on('error', reject);
+      });
+      
       fs.unlinkSync(chunkPath); // delete as we go to free space
     }
     await new Promise((resolve, reject) => {

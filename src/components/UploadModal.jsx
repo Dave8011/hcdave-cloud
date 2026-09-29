@@ -59,6 +59,7 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
   const [dragging, setDragging] = useState(false);
   const [currentFileName, setCurrentFileName] = useState('');
   const [uploadError, setUploadError] = useState('');
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const fileInputRef = useRef();
   const folderInputRef = useRef();
 
@@ -100,6 +101,7 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
 
       // Upload all files to their correct paths
       for (let i = 0; i < files.length; i++) {
+        setCurrentFileIndex(i);
         const file = files[i];
         setCurrentFileName(file.name);
         const destPath = getSubPath(file, currentPath || '/');
@@ -206,7 +208,12 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
             {uploading && (
               <div className="upload-progress">
                 <div className="upload-progress-label">
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{currentFileName || 'Uploading…'}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                    {files.length > 1
+                      ? `${currentFileIndex} done, ${files.length - currentFileIndex} pending... (${currentFileName})`
+                      : currentFileName || 'Uploading…'
+                    }
+                  </span>
                   <span>{progress}%</span>
                 </div>
                 <div className="prog-bg"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
