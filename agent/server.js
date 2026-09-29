@@ -54,13 +54,19 @@ if (fs.existsSync(envPath)) {
 
 let GIT_HASH = '';
 let GIT_COUNT = '0';
-try {
-  GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
-  GIT_COUNT = execSync('git rev-list --count HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
-} catch (e) {}
+// Try to get version from the repository even if we are running in /opt/hcdave-agent
+const repoPaths = [__dirname, '/home/root1/hcdave-cloud', '/home/dave/dev/drive-wifi'];
+for (const repo of repoPaths) {
+  try {
+    GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: repo, stdio: 'pipe' }).toString().trim();
+    GIT_COUNT = execSync('git rev-list --count HEAD', { cwd: repo, stdio: 'pipe' }).toString().trim();
+    if (GIT_HASH) break;
+  } catch (e) {}
+}
 
-// Hardcoded version per user request
-const VERSION = `1.4.0`;
+// Truly automatic versioning based on commit count. 
+// Every git commit automatically bumps the version number (e.g. 1.4.52)
+const VERSION = `1.4.${GIT_COUNT}${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
