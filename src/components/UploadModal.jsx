@@ -50,6 +50,21 @@ function formatSize(bytes) {
   return `${(bytes / (1024 ** 3)).toFixed(2)} GB`;
 }
 
+function formatSpeed(bytesPerSec) {
+  if (!bytesPerSec || isNaN(bytesPerSec)) return '0 B/s';
+  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+  return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+}
+
+function formatEta(seconds) {
+  if (seconds == null || isNaN(seconds) || seconds === Infinity) return 'Calculating...';
+  if (seconds < 60) return `${Math.ceil(seconds)}s left`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.ceil(seconds % 60);
+  return `${m}m ${s}s left`;
+}
+
 export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplete }) {
   const [files, setFiles] = useState([]);
   const [progress, setProgress] = useState(0);
@@ -60,6 +75,9 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
   const [currentFileName, setCurrentFileName] = useState('');
   const [uploadError, setUploadError] = useState('');
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
+  const [uploadSpeed, setUploadSpeed] = useState(0);
+  const [etaSeconds, setEtaSeconds] = useState(null);
+  const [skippedCount, setSkippedCount] = useState(0);
   const fileInputRef = useRef();
   const folderInputRef = useRef();
 
@@ -93,6 +111,9 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
     setUploading(true);
     setProgress(0);
     setUploadError('');
+    setUploadSpeed(0);
+    setEtaSeconds(null);
+    setSkippedCount(0);
 
     try {
       // The backend (server.js /api/upload-complete) automatically creates 
@@ -118,6 +139,15 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
         console.warn('Failed to check existing files', err);
       }
 
+      const filesToUpload = files.filter(f => {
+        const destPath = getSubPath(f, currentPath || '/');
+        const fullPath = destPath === '/' ? `/${f.name}` : `${destPath}/${f.name}`;
+        return !existingSet.has(fullPath);
+      });
+      const totalBytesToUpload = filesToUpload.reduce((acc, f) => acc + f.size, 0);
+      let totalBytesUploadedBeforeCurrentFile = 0;
+      const startTime = Date.now();
+
       // Upload all files to their correct paths
       for (let i = 0; i < files.length; i++) {
         setCurrentFileIndex(i);
@@ -129,6 +159,7 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
         
         if (existingSet.has(fullPath)) {
           setProgress(Math.round(((i + 1) / files.length) * 100));
+          setSkippedCount(prev => prev + 1);
           continue; // Skip file because it already exists with the same size
         }
 
@@ -136,11 +167,23 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
           activeDrive.id,
           file,
           destPath,
-          (p) => {
-            const overall = Math.round(((i + p / 100) / files.length) * 100);
-            setProgress(overall);
+          (p, loadedBytesForCurrentFile) => {
+            const overallPercentage = Math.round(((i + p / 100) / files.length) * 100);
+            setProgress(overallPercentage);
+            
+            const now = Date.now();
+            const elapsed = (now - startTime) / 1000;
+            if (elapsed > 0.5) {
+               const currentTotalLoaded = totalBytesUploadedBeforeCurrentFile + (loadedBytesForCurrentFile || 0);
+               const speed = currentTotalLoaded / elapsed;
+               const bytesRemaining = totalBytesToUpload - currentTotalLoaded;
+               const eta = bytesRemaining > 0 ? bytesRemaining / Math.max(speed, 1) : 0;
+               setUploadSpeed(speed);
+               setEtaSeconds(eta);
+            }
           }
         );
+        totalBytesUploadedBeforeCurrentFile += file.size;
       }
     } catch (e) {
       setUploadError(e.message || 'Upload failed');
@@ -188,8 +231,13 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
           <div style={{ padding: '32px', textAlign: 'center' }}>
             <CheckCircle2 size={56} color="var(--emerald)" style={{ marginBottom: 14 }} />
             <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>
-              {files.length} file{files.length > 1 ? 's' : ''} uploaded!
+              {files.length - skippedCount} file{(files.length - skippedCount) !== 1 ? 's' : ''} uploaded!
             </div>
+            {skippedCount > 0 && (
+              <div style={{ color: 'var(--text-3)', fontSize: '0.9rem', marginTop: 6 }}>
+                ({skippedCount} file{skippedCount !== 1 ? 's' : ''} skipped)
+              </div>
+            )}
             <div style={{ color: 'var(--text-3)', fontSize: '0.85rem', marginTop: 4 }}>Saved to {activeDrive?.name}</div>
           </div>
         ) : (
@@ -244,7 +292,12 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
                   <span>{progress}%</span>
                 </div>
                 <div className="prog-bg"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
-                {!minimized && <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', marginTop: 6 }}>Uploading in 50 MB chunks — folder structure is preserved.</div>}
+                {!minimized && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-3)', marginTop: 6 }}>
+                    <span>{uploadSpeed > 0 ? `${formatSpeed(uploadSpeed)} • ${formatEta(etaSeconds)}` : 'Calculating...'}</span>
+                    <span>Uploading in 50 MB chunks</span>
+                  </div>
+                )}
               </div>
             )}
 

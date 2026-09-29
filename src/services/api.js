@@ -124,7 +124,8 @@ export class StorageService {
               if (e.lengthComputable && onProgress) {
                 // Combine completed chunks + progress within current chunk
                 const overall = Math.round(((i + e.loaded / e.total) / totalChunks) * 100);
-                onProgress(overall);
+                const loadedBytes = (i * CHUNK_SIZE) + e.loaded;
+                onProgress(overall, loadedBytes);
               }
             };
             xhr.onload = () => {
