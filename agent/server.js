@@ -53,19 +53,15 @@ if (fs.existsSync(envPath)) {
 }
 
 let GIT_HASH = '';
+let GIT_COUNT = '0';
 try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
+  GIT_COUNT = execSync('git rev-list --count HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-// Read version from package.json — the ONLY source of truth for the version number.
-// To bump the version: edit package.json "version" field and push. No code changes needed.
-let PKG_VERSION = '1.3.2';
-try {
-  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-  if (pkg.version) PKG_VERSION = pkg.version;
-} catch (_) {}
-
-const VERSION       = `${PKG_VERSION}${GIT_HASH ? '-' + GIT_HASH : ''}`;
+// Truly automatic versioning based on commit count. 
+// Every git commit automatically bumps the version number (e.g. 1.4.52)
+const VERSION = `1.4.${GIT_COUNT}${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
