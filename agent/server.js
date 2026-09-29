@@ -53,17 +53,19 @@ if (fs.existsSync(envPath)) {
 }
 
 let GIT_HASH = '';
-let GIT_VERSION = '1.3.2';
 try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
-  const logMsg = execSync('git log --grep="^v[0-9]" -1 --format="%s"', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
-  const match = logMsg.match(/^v([0-9]+\.[0-9]+\.[0-9]+)/);
-  if (match) {
-    GIT_VERSION = match[1];
-  }
 } catch (e) {}
 
-const VERSION       = `${GIT_VERSION}${GIT_HASH ? '-' + GIT_HASH : ''}`;
+// Read version from package.json — the ONLY source of truth for the version number.
+// To bump the version: edit package.json "version" field and push. No code changes needed.
+let PKG_VERSION = '1.3.2';
+try {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+  if (pkg.version) PKG_VERSION = pkg.version;
+} catch (_) {}
+
+const VERSION       = `${PKG_VERSION}${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -1524,5 +1526,32 @@ app.post('/api/cache/invalidate', rateLimitAuth, auth, (req, res) => {
     writeCacheIndex(index);
   }
   res.json({ success: true });
+});
+
+// POST /api/cache/set-mount  body: { mountPath: string }
+// Permanently sets CACHE_MOUNT in /opt/hcdave-agent/.env so the cache drive
+// survives restarts. The calling UI passes the mountpoint of the chosen drive.
+app.post('/api/cache/set-mount', rateLimitAuth, auth, (req, res) => {
+  const { mountPath } = req.body || {};
+  if (!mountPath || typeof mountPath !== 'string') {
+    return res.status(400).json({ error: 'mountPath is required' });
+  }
+  // Validate it actually exists and is a directory
+  if (!fs.existsSync(mountPath) || !fs.statSync(mountPath).isDirectory()) {
+    return res.status(400).json({ error: `Path does not exist: ${mountPath}` });
+  }
+  try {
+    const envFile = path.join(__dirname, '.env');
+    let content   = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+    // Remove existing CACHE_MOUNT line(s) then append the new one
+    content = content.split('\n').filter(l => !l.startsWith('CACHE_MOUNT=')).join('\n').trimEnd();
+    content += `\nCACHE_MOUNT=${mountPath}\n`;
+    fs.writeFileSync(envFile, content, { mode: 0o600 });
+    // Update in-memory so it takes effect immediately without restart
+    process.env.CACHE_MOUNT = mountPath;
+    res.json({ success: true, cacheMount: mountPath });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 

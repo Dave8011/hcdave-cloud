@@ -549,23 +549,56 @@ body::before {
 .toolbar {
   display: flex;
   align-items: center;
+  gap: 10px;
   justify-content: space-between;
   margin-bottom: 20px;
   animation: fadeUp 0.4s ease 0.2s both;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .breadcrumbs {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   font-size: 0.88rem;
   font-weight: 600;
+  /* Scrollable when path is very deep — no ugly line-wrap */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* IE/Edge */
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 2px;
 }
+.breadcrumbs::-webkit-scrollbar { display: none; } /* Chrome/Safari */
 
-.bc-root { color: var(--text-2); cursor: pointer; transition: var(--transition); }
+.bc-root {
+  color: var(--text-2);
+  cursor: pointer;
+  transition: var(--transition);
+  /* Truncate long folder names — max 14 chars visible */
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
 .bc-root:hover { color: var(--text-1); }
-.bc-sep { color: var(--text-3); }
-.bc-current { color: var(--text-1); }
+.bc-sep { color: var(--text-3); flex-shrink: 0; }
+.bc-current {
+  color: var(--text-1);
+  /* Current folder can be slightly longer but still truncated */
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
 
 .view-toggle {
   display: flex;

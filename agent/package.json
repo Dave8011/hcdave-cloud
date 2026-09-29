@@ -1,6 +1,6 @@
 {
   "name": "home-storage-agent",
-  "version": "1.0.0",
+  "version": "1.3.2",
   "private": true,
   "description": "Lightweight Storage Agent Server for TV Box / Router to serve USB HDD & SSD drives",
   "main": "server.js",

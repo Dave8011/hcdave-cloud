@@ -268,13 +268,49 @@ export function CachePanel({ drives }) {
         </div>
       )}
 
-      {/* ffmpeg install note */}
-      <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', lineHeight: 1.7, padding: '8px 10px', background: 'rgba(0,0,0,0.15)', borderRadius: 6 }}>
-        <strong style={{ color: 'var(--text-2)' }}>First time setup:</strong><br />
-        On your Dell server, run:<br />
-        <code style={{ color: 'var(--cyan)' }}>sudo apt install ffmpeg</code><br />
-        Then set the cache drive path in <code>agent/.env</code>:<br />
-        <code style={{ color: 'var(--cyan)' }}>CACHE_MOUNT=/mnt/hcdave-cache</code>
+      {/* ── Set Cache Drive ── */}
+      <div style={s.card}>
+        <div style={s.sectionTitle}><HardDrive size={14} color="var(--amber)" /> Set Cache Drive</div>
+        <div style={{ fontSize: '0.78rem', color: 'var(--text-2)', marginBottom: 10, lineHeight: 1.6 }}>
+          Choose which plugged-in drive will store all converted videos.
+          {status?.cacheMount && (
+            <div style={{ marginTop: 6 }}>
+              <span style={{ color: 'var(--text-3)' }}>Current: </span>
+              <code style={{ color: 'var(--cyan)' }}>{status.cacheMount}</code>
+              {status.cacheMountExists
+                ? <span style={{ marginLeft: 6, color: 'var(--emerald)', fontSize: '0.72rem' }}>● Active</span>
+                : <span style={{ marginLeft: 6, color: 'var(--rose)', fontSize: '0.72rem' }}>● Not found — plug in the drive</span>}
+            </div>
+          )}
+        </div>
+        {drives && drives.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {drives.map(d => (
+              <button
+                key={d.id}
+                className="btn btn-ghost"
+                style={{ justifyContent: 'flex-start', gap: 10, fontSize: '0.82rem', textAlign: 'left',
+                  border: status?.cacheMount === d.mount ? '1px solid var(--emerald)' : undefined,
+                  color: status?.cacheMount === d.mount ? 'var(--emerald)' : undefined }}
+                onClick={async () => {
+                  try {
+                    await StorageService.setCacheMount(d.mount);
+                    refresh();
+                  } catch (e) { setError(e.message); }
+                }}
+              >
+                <HardDrive size={13} />
+                <span style={{ flex: 1 }}>{d.name}</span>
+                <span style={{ color: 'var(--text-3)', fontSize: '0.72rem' }}>{d.freeGB} GB free · {d.totalGB} GB</span>
+                {status?.cacheMount === d.mount && <CheckCircle2 size={13} color="var(--emerald)" />}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-3)' }}>
+            No drives detected. Plug in your cache SSD and it will appear here automatically.
+          </div>
+        )}
       </div>
     </div>
   );

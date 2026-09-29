@@ -333,4 +333,14 @@ export class StorageService {
   static async cacheVideo(driveId, sourcePath) {
     return this.startCache([], [`${driveId}::${sourcePath}`]);
   }
+
+  static async setCacheMount(mountPath) {
+    const r = await fetch(`${this.getAgentUrl()}/api/cache/set-mount`, {
+      method: 'POST', headers: this.headers(),
+      body: JSON.stringify({ mountPath }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to set cache drive');
+    return data;
+  }
 }

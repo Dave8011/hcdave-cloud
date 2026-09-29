@@ -1,5 +1,5 @@
 import React from 'react';
-import { HardDrive, Cpu, Folder, Clock, Star, ShieldCheck, Wifi, PlugZap, Database } from 'lucide-react';
+import { HardDrive, Cpu, Folder, ShieldCheck, Wifi, PlugZap, Database } from 'lucide-react';
 
 export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, setActiveTab, isOpen, onCacheDrive, driveStats }) {
   return (
@@ -103,20 +103,13 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
         {/* Navigation */}
         <div className="section-label" style={{ marginTop: 8 }}>Browse</div>
         <nav className="nav-menu">
-          {[
-            { key: 'all',     Icon: Folder, label: 'All Files' },
-            { key: 'recent',  Icon: Clock,  label: 'Recent' },
-            { key: 'starred', Icon: Star,   label: 'Favorites' },
-          ].map(({ key, Icon, label }) => (
-            <div
-              key={key}
-              className={`nav-item ${activeTab === key ? 'active' : ''}`}
-              onClick={() => setActiveTab(key)}
-            >
-              <Icon size={17} />
-              <span>{label}</span>
-            </div>
-          ))}
+          <div
+            className={`nav-item ${activeTab === 'all' ? 'active' : ''}`}
+            onClick={() => setActiveTab('all')}
+          >
+            <Folder size={17} />
+            <span>All Files</span>
+          </div>
         </nav>
       </div>
 
