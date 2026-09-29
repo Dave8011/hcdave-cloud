@@ -311,9 +311,19 @@ const CHUNK_TMP_DIR = '/tmp/hcdave-chunks';
 try { fs.mkdirSync(CHUNK_TMP_DIR, { recursive: true }); } catch (_) {}
 
 const chunkStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, CHUNK_TMP_DIR),
+  destination: (req, file, cb) => {
+    let chunkDir = CHUNK_TMP_DIR;
+    if (req.body.driveId) {
+      const drives = getMountedDrives();
+      const drive = drives.find(d => d.id === req.body.driveId) || drives[0];
+      if (drive) {
+        chunkDir = path.join(drive.mount, '.hcdave-chunks');
+        try { fs.mkdirSync(chunkDir, { recursive: true }); } catch (_) {}
+      }
+    }
+    cb(null, chunkDir);
+  },
   filename: (req, file, cb) => {
-    // uploadId and chunkIndex must be in req.body (appended before the file in FormData)
     cb(null, `${req.body.uploadId}-${req.body.chunkIndex}`);
   }
 });
@@ -695,11 +705,14 @@ app.post('/api/upload-complete', rateLimitAuth, auth, async (req, res) => {
     const destDir  = safePath(drive.mount, uploadPath || '/');
     fs.mkdirSync(destDir, { recursive: true });
     const destFile = path.join(destDir, filename);
+    const chunkDir = path.join(drive.mount, '.hcdave-chunks');
 
     // Stream-merge chunks in order
     const writeStream = fs.createWriteStream(destFile);
     for (let i = 0; i < Number(totalChunks); i++) {
-      const chunkPath = path.join(CHUNK_TMP_DIR, `${uploadId}-${i}`);
+      let chunkPath = path.join(chunkDir, `${uploadId}-${i}`);
+      // Fallback to /tmp just in case it was saved there
+      if (!fs.existsSync(chunkPath)) chunkPath = path.join(CHUNK_TMP_DIR, `${uploadId}-${i}`);
       if (!fs.existsSync(chunkPath)) {
         writeStream.destroy();
         return res.status(400).json({ error: `Missing chunk ${i}` });
@@ -755,6 +768,35 @@ app.post('/api/mkdir', rateLimitAuth, auth, (req, res) => {
 
     fs.mkdirSync(newDir, { recursive: true });
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/check-files
+// Checks if files exist with the same size to skip uploading
+app.post('/api/check-files', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, files } = req.body;
+    if (!files || !Array.isArray(files)) return res.status(400).json({ error: 'Files array required' });
+
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const existing = [];
+    for (const f of files) {
+      try {
+        const target = safePath(drive.mount, f.path);
+        if (fs.existsSync(target)) {
+          const stat = fs.statSync(target);
+          if (stat.size === f.size) {
+            existing.push(f.path);
+          }
+        }
+      } catch (_) {}
+    }
+    res.json({ existing });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

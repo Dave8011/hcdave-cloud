@@ -99,12 +99,39 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
       // parent directories recursively using fs.mkdirSync(..., { recursive: true }).
       // There is no need to make hundreds of sequential HTTP requests to pre-create folders!
 
+      // Pre-check for existing files to skip
+      const existingSet = new Set();
+      try {
+        const BATCH_SIZE = 500;
+        for (let i = 0; i < files.length; i += BATCH_SIZE) {
+          const batch = files.slice(i, i + BATCH_SIZE).map(f => {
+            const destPath = getSubPath(f, currentPath || '/');
+            return {
+              path: destPath === '/' ? `/${f.name}` : `${destPath}/${f.name}`,
+              size: f.size
+            };
+          });
+          const existing = await StorageService.checkExistingFiles(activeDrive.id, batch);
+          existing.forEach(p => existingSet.add(p));
+        }
+      } catch (err) {
+        console.warn('Failed to check existing files', err);
+      }
+
       // Upload all files to their correct paths
       for (let i = 0; i < files.length; i++) {
         setCurrentFileIndex(i);
         const file = files[i];
         setCurrentFileName(file.name);
+        
         const destPath = getSubPath(file, currentPath || '/');
+        const fullPath = destPath === '/' ? `/${file.name}` : `${destPath}/${file.name}`;
+        
+        if (existingSet.has(fullPath)) {
+          setProgress(Math.round(((i + 1) / files.length) * 100));
+          continue; // Skip file because it already exists with the same size
+        }
+
         await StorageService.uploadFile(
           activeDrive.id,
           file,

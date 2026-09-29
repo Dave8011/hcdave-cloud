@@ -78,6 +78,23 @@ export class StorageService {
       return [];
     }
   }
+  // POST /api/check-files — check if files already exist on the drive
+  static async checkExistingFiles(driveId, files) {
+    if (!driveId || !files || !files.length) return [];
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/api/check-files`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ driveId, files })
+      });
+      if (!r.ok) return [];
+      const data = await r.json();
+      return data.existing || [];
+    } catch {
+      return [];
+    }
+  }
+
 
   // POST /api/upload — upload a file with real progress
   static uploadFile(driveId, file, uploadPath = '/', onProgress) {
