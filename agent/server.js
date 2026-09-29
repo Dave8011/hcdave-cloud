@@ -57,7 +57,7 @@ try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-const VERSION       = `1.3.0${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `1.3.2${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
@@ -192,6 +192,10 @@ async function updateDrives() {
       try {
         const stat = fs.statSync(fullPath);
         if (!stat.isDirectory()) continue;
+
+        // Ensure the directory is an actual mount point (different device from parent)
+        const parentStat = fs.statSync(base);
+        if (stat.dev === parentStat.dev) continue;
 
         let totalGB = 0, usedGB = 0, freeGB = 0;
         try {
