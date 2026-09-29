@@ -834,6 +834,34 @@ body::before {
 
 .modal-title { font-size: 1.1rem; font-weight: 700; }
 
+.upload-minimized-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none; /* Let clicks pass through to the background */
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  z-index: 200;
+  padding: 24px;
+}
+
+.upload-minimized-box {
+  background: rgba(15,20,30,0.95);
+  border: 1px solid rgba(99,102,241,0.3);
+  border-radius: var(--r-md);
+  padding: 20px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.6), 0 0 20px rgba(99,102,241,0.1);
+  pointer-events: auto; /* Re-enable clicks on the widget itself */
+  animation: slideUpFade 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: all 0.3s ease;
+}
+
+@keyframes slideUpFade {
+  from { opacity: 0; transform: translateY(20px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 /* ─────────────────────────────────────────────
    LOGIN PAGE
    ───────────────────────────────────────────── */

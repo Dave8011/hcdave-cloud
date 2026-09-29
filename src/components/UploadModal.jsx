@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { X, UploadCloud, CheckCircle2, File as FileIcon, Folder } from 'lucide-react';
+import { X, UploadCloud, CheckCircle2, File as FileIcon, Folder, Minus, Maximize2 } from 'lucide-react';
 import { StorageService } from '../services/api';
 
 // Recursively collect all File objects from a DataTransferItem entry (folder or file)
@@ -46,6 +46,7 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
   const [files, setFiles] = useState([]);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const [done, setDone] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [currentFileName, setCurrentFileName] = useState('');
@@ -128,15 +129,22 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
     : `${files.length} file(s) selected`;
 
   return (
-    <div className="modal-overlay" onClick={!uploading ? onClose : undefined}>
-      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+    <div className={minimized ? "upload-minimized-overlay" : "modal-overlay"} onClick={(!uploading && !minimized) ? onClose : undefined}>
+      <div className={minimized ? "upload-minimized-box" : "modal-box"} onClick={(e) => e.stopPropagation()}>
         <div className="modal-title-row">
           <div className="modal-title">Upload to {activeDrive?.name || 'Drive'}</div>
-          {!uploading && (
-            <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4, display: 'flex' }}>
-              <X size={20} />
-            </button>
-          )}
+          <div style={{ display: 'flex', gap: 4 }}>
+            {(!done && files.length > 0) && (
+              <button onClick={() => setMinimized(!minimized)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4, display: 'flex' }} title={minimized ? "Maximize" : "Minimize"}>
+                {minimized ? <Maximize2 size={18} /> : <Minus size={18} />}
+              </button>
+            )}
+            {(!uploading || minimized) && (
+              <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4, display: 'flex' }}>
+                <X size={20} />
+              </button>
+            )}
+          </div>
         </div>
 
         {done ? (
@@ -149,28 +157,30 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
           </div>
         ) : (
           <>
-            <div
-              className={`drop-zone ${dragging ? 'drag-over' : ''}`}
-              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={handleDrop}
-            >
-              <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => addFlatFiles(e.target.files)} />
-              <input ref={folderInputRef} type="file" webkitdirectory="true" multiple style={{ display: 'none' }} onChange={handleFolderInput} />
-              <UploadCloud size={40} color="var(--indigo)" style={{ marginBottom: 10 }} />
-              <div className="drop-title">{selectionLabel}</div>
-              <div className="drop-sub" style={{ marginBottom: 14 }}>Drag & drop files or entire folders — structure is preserved</div>
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-                <button className="btn btn-ghost" style={{ fontSize: '0.82rem', padding: '6px 14px' }} onClick={() => fileInputRef.current?.click()} type="button">
-                  <FileIcon size={14} /><span>Select Files</span>
-                </button>
-                <button className="btn btn-ghost" style={{ fontSize: '0.82rem', padding: '6px 14px' }} onClick={() => folderInputRef.current?.click()} type="button">
-                  <Folder size={14} /><span>Select Folder</span>
-                </button>
+            {!minimized && (
+              <div
+                className={`drop-zone ${dragging ? 'drag-over' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+              >
+                <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => addFlatFiles(e.target.files)} />
+                <input ref={folderInputRef} type="file" webkitdirectory="true" multiple style={{ display: 'none' }} onChange={handleFolderInput} />
+                <UploadCloud size={40} color="var(--indigo)" style={{ marginBottom: 10 }} />
+                <div className="drop-title">{selectionLabel}</div>
+                <div className="drop-sub" style={{ marginBottom: 14 }}>Drag & drop files or entire folders — structure is preserved</div>
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  <button className="btn btn-ghost" style={{ fontSize: '0.82rem', padding: '6px 14px' }} onClick={() => fileInputRef.current?.click()} type="button">
+                    <FileIcon size={14} /><span>Select Files</span>
+                  </button>
+                  <button className="btn btn-ghost" style={{ fontSize: '0.82rem', padding: '6px 14px' }} onClick={() => folderInputRef.current?.click()} type="button">
+                    <Folder size={14} /><span>Select Folder</span>
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
-            {files.length > 0 && !uploading && (
+            {files.length > 0 && !uploading && !minimized && (
               <div style={{ maxHeight: 140, overflowY: 'auto', marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {files.map((f, i) => {
                   const rel = f._relativePath || f.webkitRelativePath || f.name;
@@ -192,7 +202,7 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
                   <span>{progress}%</span>
                 </div>
                 <div className="prog-bg"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', marginTop: 6 }}>Uploading in 50 MB chunks — folder structure is preserved.</div>
+                {!minimized && <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', marginTop: 6 }}>Uploading in 50 MB chunks — folder structure is preserved.</div>}
               </div>
             )}
 
@@ -200,16 +210,18 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
               <div style={{ fontSize: '0.82rem', color: 'var(--rose)', marginBottom: 12 }}>⚠ {uploadError}</div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-              <button className="btn btn-ghost" style={{ fontSize: '0.78rem' }} onClick={() => setFiles([])} disabled={!files.length || uploading}>Clear</button>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button className="btn btn-ghost" onClick={onClose} disabled={uploading}>Cancel</button>
+            {!minimized && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                <button className="btn btn-ghost" style={{ fontSize: '0.78rem' }} onClick={() => setFiles([])} disabled={!files.length || uploading}>Clear</button>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button className="btn btn-ghost" onClick={onClose} disabled={uploading}>Cancel</button>
                 <button className="btn btn-primary" onClick={handleUpload} disabled={!files.length || uploading}>
                   {uploading ? <div className="spinner" /> : <UploadCloud size={16} />}
                   <span>{uploading ? 'Uploading…' : `Upload${files.length ? ` (${files.length})` : ''}`}</span>
                 </button>
               </div>
-            </div>
+              </div>
+            )}
           </>
         )}
       </div>
