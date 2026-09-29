@@ -802,6 +802,66 @@ app.post('/api/check-files', rateLimitAuth, auth, (req, res) => {
   }
 });
 
+// POST /api/rename
+app.post('/api/rename', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, path: itemPath, newName } = req.body;
+    if (!itemPath || !newName) return res.status(400).json({ error: 'path and newName are required' });
+
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const source = safePath(drive.mount, itemPath);
+    if (!fs.existsSync(source)) return res.status(404).json({ error: 'Source not found' });
+
+    const dest = path.join(path.dirname(source), newName);
+    if (fs.existsSync(dest)) return res.status(409).json({ error: 'Destination name already exists' });
+
+    fs.renameSync(source, dest);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/move
+app.post('/api/move', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, paths, destPath } = req.body;
+    if (!paths || !Array.isArray(paths) || !destPath) return res.status(400).json({ error: 'paths array and destPath are required' });
+
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const targetDir = safePath(drive.mount, destPath);
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+    const errors = [];
+    for (const p of paths) {
+      try {
+        const source = safePath(drive.mount, p);
+        if (fs.existsSync(source)) {
+          const dest = path.join(targetDir, path.basename(source));
+          if (fs.existsSync(dest)) {
+            errors.push(`${path.basename(source)} already exists in destination`);
+          } else {
+            fs.renameSync(source, dest);
+          }
+        }
+      } catch (e) {
+        errors.push(`Failed to move ${path.basename(p)}: ${e.message}`);
+      }
+    }
+
+    if (errors.length > 0) return res.status(207).json({ error: 'Some items failed to move', details: errors });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/delete
 app.post('/api/delete', rateLimitAuth, auth, (req, res) => {
   let { driveId, paths } = req.body;

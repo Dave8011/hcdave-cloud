@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Download, Film, Image as Img, FileText, Archive, Folder, Loader, AlertCircle, Database, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Download, Film, Image as Img, FileText, Archive, Folder, Loader, AlertCircle, Database, CheckCircle2, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-react';
 import { StorageService } from '../services/api';
 
 const ICON_MAP = {
@@ -64,50 +64,95 @@ function ImagePreview({ src, alt }) {
   );
 }
 
-export function FilePreviewModal({ file, driveId, onClose }) {
-  if (!file) return null;
+export function FilePreviewModal({ initialFile, files = [], selectedPaths = new Set(), driveId, onClose }) {
+  // Build the playlist for the slider. Only include images.
+  const [playlistState, setPlaylistState] = useState(() => {
+    const isSelectionActive = selectedPaths.size > 0;
+    const playlist = isSelectionActive 
+      ? files.filter(f => selectedPaths.has(f.path) && f.type === 'image') 
+      : files.filter(f => f.type === 'image');
+    
+    const idx = playlist.findIndex(f => f.path === initialFile.path);
+    return { list: playlist, index: idx };
+  });
 
-  const { Icon, color } = ICON_MAP[file.type] || ICON_MAP.document;
+  const { list, index } = playlistState;
+  
+  // If the initial file is an image, it might be in the playlist. 
+  // If it's a video/document, it's just the initial file and the slider won't show.
+  const currentFile = (index >= 0 && index < list.length) ? list[index] : initialFile;
+  const isSliderActive = index >= 0 && list.length > 1;
+
+  const [isSlideshow, setIsSlideshow] = useState(false);
+  const [intervalSec, setIntervalSec] = useState(3);
   const [cacheStatus, setCacheStatus] = useState('idle'); // idle | caching | done | error
 
+  useEffect(() => {
+    let timer;
+    if (isSlideshow && isSliderActive) {
+      timer = setInterval(() => {
+        setPlaylistState(prev => ({
+          ...prev,
+          index: (prev.index + 1) % prev.list.length
+        }));
+      }, intervalSec * 1000);
+    }
+    return () => clearInterval(timer);
+  }, [isSlideshow, intervalSec, isSliderActive]);
+
+  const handleNext = (e) => {
+    if (e) e.stopPropagation();
+    if (isSliderActive) setPlaylistState(prev => ({ ...prev, index: (prev.index + 1) % prev.list.length }));
+  };
+
+  const handlePrev = (e) => {
+    if (e) e.stopPropagation();
+    if (isSliderActive) setPlaylistState(prev => ({ ...prev, index: (prev.index - 1 + prev.list.length) % prev.list.length }));
+  };
+
+  if (!currentFile) return null;
+
+  const { Icon, color } = ICON_MAP[currentFile.type] || ICON_MAP.document;
+
   const handleDownload = () => {
-    StorageService.downloadFile(driveId, file.path || file.name, file.name);
+    StorageService.downloadFile(driveId, currentFile.path || currentFile.name, currentFile.name);
   };
 
   const handleCache = async () => {
     setCacheStatus('caching');
     try {
-      await StorageService.cacheVideo(driveId, file.path || file.name);
+      await StorageService.cacheVideo(driveId, currentFile.path || currentFile.name);
       setCacheStatus('done');
     } catch (e) {
       setCacheStatus('error');
     }
   };
 
-  const streamUrl  = file.type === 'video'
-    ? StorageService.getStreamUrl(driveId, file.path || file.name)
+  const streamUrl  = currentFile.type === 'video'
+    ? StorageService.getStreamUrl(driveId, currentFile.path || currentFile.name)
     : null;
-  const previewUrl = file.type === 'image'
-    ? StorageService.getPreviewUrl(driveId, file.path || file.name)
+  const previewUrl = currentFile.type === 'image'
+    ? StorageService.getPreviewUrl(driveId, currentFile.path || currentFile.name)
     : null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-box"
-        style={{ maxWidth: 720 }}
+        style={{ maxWidth: 720, padding: 0 }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="modal-title-row">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <div className="modal-title-row" style={{ padding: '24px 24px 16px 24px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
             <Icon size={20} color={color} style={{ flexShrink: 0 }} />
             <span
               className="modal-title"
               style={{ fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              title={file.name}
+              title={currentFile.name}
             >
-              {file.name}
+              {currentFile.name}
+              {isSliderActive && <span style={{ color: 'var(--text-4)', marginLeft: 8, fontWeight: 400, fontSize: '0.85rem' }}>({index + 1} of {list.length})</span>}
             </span>
           </div>
           <button
@@ -119,39 +164,94 @@ export function FilePreviewModal({ file, driveId, onClose }) {
         </div>
 
         {/* Preview Body */}
-        <div className="preview-media-wrap">
-          {file.type === 'image' && previewUrl && (
-            <ImagePreview src={previewUrl} alt={file.name} />
-          )}
-
-          {file.type === 'video' && streamUrl && (
-            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', alignItems: 'center' }}>
-              <video controls autoPlay className="preview-video" style={{ maxHeight: '70vh' }}>
-                <source src={streamUrl} />
-              </video>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', textAlign: 'center', marginTop: 8, paddingBottom: 4 }}>
-                Tip: If video stutters, the codec may be incompatible with your browser.
+        <div className="preview-media-wrap" style={{ position: 'relative', padding: 0, minHeight: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+          
+          {/* Left Arrow */}
+          {isSliderActive && (
+            <div 
+              onClick={handlePrev}
+              style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '20%', display: 'flex', alignItems: 'center', cursor: 'pointer', zIndex: 10, paddingLeft: 12, backgroundImage: 'linear-gradient(to right, rgba(0,0,0,0.3), transparent)' }}
+            >
+              <div style={{ background: 'rgba(0,0,0,0.5)', borderRadius: '50%', padding: 8, display: 'flex', color: 'white', backdropFilter: 'blur(4px)' }}>
+                <ChevronLeft size={24} />
               </div>
             </div>
           )}
 
-          {(file.type !== 'image' && file.type !== 'video') && (
-            <div className="preview-fallback">
-              <Icon size={56} color={color} style={{ opacity: 0.5, marginBottom: 12 }} />
-              <div style={{ fontWeight: 600 }}>{file.name}</div>
-              <div style={{ fontSize: '0.82rem', marginTop: 4, color: 'var(--text-3)' }}>
-                {file.size} · Modified {file.modified}
+          <div style={{ padding: '24px', width: '100%', display: 'flex', justifyContent: 'center' }}>
+            {currentFile.type === 'image' && previewUrl && (
+              <ImagePreview src={previewUrl} alt={currentFile.name} />
+            )}
+
+            {currentFile.type === 'video' && streamUrl && (
+              <div style={{ display: 'flex', flexDirection: 'column', width: '100%', alignItems: 'center' }}>
+                <video controls autoPlay className="preview-video" style={{ maxHeight: '60vh' }}>
+                  <source src={streamUrl} />
+                </video>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', textAlign: 'center', marginTop: 8 }}>
+                  Tip: If video stutters, the codec may be incompatible with your browser.
+                </div>
+              </div>
+            )}
+
+            {(currentFile.type !== 'image' && currentFile.type !== 'video') && (
+              <div className="preview-fallback">
+                <Icon size={56} color={color} style={{ opacity: 0.5, marginBottom: 12 }} />
+                <div style={{ fontWeight: 600 }}>{currentFile.name}</div>
+                <div style={{ fontSize: '0.82rem', marginTop: 4, color: 'var(--text-3)' }}>
+                  {currentFile.size} · Modified {currentFile.modified}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right Arrow */}
+          {isSliderActive && (
+            <div 
+              onClick={handleNext}
+              style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '20%', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', cursor: 'pointer', zIndex: 10, paddingRight: 12, backgroundImage: 'linear-gradient(to left, rgba(0,0,0,0.3), transparent)' }}
+            >
+              <div style={{ background: 'rgba(0,0,0,0.5)', borderRadius: '50%', padding: 8, display: 'flex', color: 'white', backdropFilter: 'blur(4px)' }}>
+                <ChevronRight size={24} />
               </div>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 4 }}>
-          <span style={{ fontSize: '0.78rem', color: 'var(--text-3)' }}>{file.size}</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '16px 24px', borderTop: '1px solid var(--border)', background: 'var(--bg-hover)' }}>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {isSliderActive && (
+              <>
+                <button 
+                  className="btn btn-ghost" 
+                  onClick={() => setIsSlideshow(!isSlideshow)}
+                  style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 6, color: isSlideshow ? 'var(--cyan)' : 'var(--text-2)' }}
+                >
+                  {isSlideshow ? <Pause size={16} /> : <Play size={16} />}
+                  <span>{isSlideshow ? 'Pause' : 'Slideshow'}</span>
+                </button>
+                <select 
+                  value={intervalSec} 
+                  onChange={e => setIntervalSec(Number(e.target.value))}
+                  style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-2)', borderRadius: 'var(--r-xs)', padding: '4px 8px', fontSize: '0.8rem', cursor: 'pointer' }}
+                >
+                  <option value={3}>3s</option>
+                  <option value={5}>5s</option>
+                  <option value={10}>10s</option>
+                  <option value={15}>15s</option>
+                </select>
+              </>
+            )}
+            {!isSliderActive && (
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-3)' }}>{currentFile.size}</span>
+            )}
+          </div>
+
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <button className="btn btn-ghost" onClick={onClose}>Close</button>
-            {file.type === 'video' && (
+            {currentFile.type === 'video' && (
               <button
                 className="btn btn-ghost"
                 onClick={handleCache}

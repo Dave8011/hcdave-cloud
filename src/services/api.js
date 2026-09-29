@@ -157,6 +157,32 @@ export class StorageService {
     });
   }
 
+  // POST /api/rename
+  static async renameItem(driveId, path, newName) {
+    if (!driveId || !path || !newName) throw new Error('Missing parameters');
+    const r = await fetch(`${this.getAgentUrl()}/api/rename`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, path, newName })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to rename');
+    return data;
+  }
+
+  // POST /api/move
+  static async moveFiles(driveId, paths, destPath) {
+    if (!driveId || !paths || !paths.length || !destPath) throw new Error('Missing parameters');
+    const r = await fetch(`${this.getAgentUrl()}/api/move`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, paths, destPath })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to move');
+    return data;
+  }
+
   // POST /api/mkdir
   static async createFolder(driveId, path, folderName) {
     const r = await fetch(`${this.getAgentUrl()}/api/mkdir`, {

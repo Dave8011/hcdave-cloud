@@ -4,7 +4,6 @@ import { IntroAnimation }   from './components/IntroAnimation';
 import { Sidebar }          from './components/Sidebar';
 import { TopBar }           from './components/TopBar';
 import { FileExplorer }     from './components/FileExplorer';
-import { FilePreviewModal } from './components/FilePreviewModal';
 import { UploadModal }      from './components/UploadModal';
 import { NewFolderModal }   from './components/NewFolderModal';
 import { SettingsModal }    from './components/SettingsModal';
@@ -29,7 +28,6 @@ export default function App() {
   const [search,       setSearch]      = useState('');
   const [files,        setFiles]       = useState([]);
   const [isLoading,    setIsLoading]   = useState(false);
-  const [selectedFile, setSelectedFile]= useState(null);
   const [showUpload,   setShowUpload]  = useState(false);
   const [showNewFolder,setShowNewFolder] = useState(false);
   const [showSettings, setShowSettings]= useState(false);
@@ -190,18 +188,9 @@ export default function App() {
           activeDrive={activeDrive || { id: activeDriveId, name: 'Drive' }}
           currentPath={currentPath}
           setCurrentPath={(p) => { setCurrentPath(p); setSearch(''); }}
-          onSelectFile={setSelectedFile}
           onRefresh={loadFiles}
         />
       </main>
-
-      {selectedFile && (
-        <FilePreviewModal
-          file={selectedFile}
-          driveId={activeDriveId}
-          onClose={() => setSelectedFile(null)}
-        />
-      )}
 
       {showUpload && (
         <UploadModal

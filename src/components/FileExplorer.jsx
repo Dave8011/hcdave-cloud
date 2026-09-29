@@ -2,9 +2,12 @@ import React, { useState, useRef, useCallback } from 'react';
 import {
   Folder, FileText, Image as Img, Film, Archive,
   Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen, Share2, RefreshCw,
-  CheckCircle2, Circle, Download, X, Trash2, CheckSquare, AlertTriangle
+  CheckCircle2, Circle, Download, X, Trash2, CheckSquare, AlertTriangle, Edit2, ArrowRightCircle
 } from 'lucide-react';
 import { ShareModal } from './ShareModal';
+import { MoveModal } from './MoveModal';
+import { RenameModal } from './RenameModal';
+import { FilePreviewModal } from './FilePreviewModal';
 import { StorageService } from '../services/api';
 
 const TYPE_MAP = {
@@ -17,7 +20,14 @@ const TYPE_MAP = {
 
 const LONG_PRESS_MS = 500;
 
-export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, setCurrentPath, onSelectFile, onRefresh }) {
+export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, currentPath, setCurrentPath, onRefresh }) {
+  const [typeFilter, setTypeFilter] = useState('all');
+  
+  const files = React.useMemo(() => {
+    if (typeFilter === 'all') return rawFiles;
+    return rawFiles.filter(f => f.type === typeFilter);
+  }, [rawFiles, typeFilter]);
+
   const [view, setView] = useState('grid');
   const [shareFiles, setShareFiles] = useState(null); // array of file objects or single file object
   const [selectedFiles, setSelectedFiles] = useState(new Set());
@@ -27,6 +37,9 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
   const [deleteModal, setDeleteModal] = useState(null); // { paths: string[], names: string[] }
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
+  const [moveModal, setMoveModal] = useState(null);
+  const [renameModal, setRenameModal] = useState(null);
+  const [previewFile, setPreviewFile] = useState(null);
 
   const longPressTimer = useRef(null);
   const didLongPress = useRef(false);
@@ -90,9 +103,9 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
     if (file.type === 'folder') {
       setCurrentPath(currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`);
     } else {
-      onSelectFile(file);
+      setPreviewFile(file);
     }
-  }, [selectMode, toggleSelect, currentPath, setCurrentPath, onSelectFile]);
+  }, [selectMode, toggleSelect, currentPath, setCurrentPath]);
 
   /* ── Batch / Single Actions ── */
   const handleDownloadZip = () => {
@@ -120,6 +133,21 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
     if (e) e.stopPropagation();
     setDeleteModal({ paths: [file.path], names: [file.name] });
     setDeleteError(null);
+  };
+
+  const promptMoveSelected = () => {
+    if (selectedFiles.size === 0) return;
+    setMoveModal({ paths: Array.from(selectedFiles) });
+  };
+
+  const promptSingleMove = (file, e) => {
+    if (e) e.stopPropagation();
+    setMoveModal({ paths: [file.path] });
+  };
+
+  const promptSingleRename = (file, e) => {
+    if (e) e.stopPropagation();
+    setRenameModal({ file });
   };
 
   const executeDelete = async () => {
@@ -164,6 +192,31 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
         </div>
 
         <div className="view-toggle">
+          <select
+            value={typeFilter}
+            onChange={(e) => {
+              setTypeFilter(e.target.value);
+              setSelectedFiles(new Set());
+              setSelectMode(false);
+            }}
+            style={{
+              background: 'transparent',
+              color: 'var(--text-3)',
+              border: 'none',
+              padding: '0 8px',
+              fontSize: '0.85rem',
+              outline: 'none',
+              cursor: 'pointer',
+              fontWeight: 500
+            }}
+          >
+            <option value="all">All Types</option>
+            <option value="image">Images</option>
+            <option value="video">Videos</option>
+            <option value="document">Docs</option>
+            <option value="archive">Zips</option>
+          </select>
+          <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 4px' }} />
           <button
             className={`view-btn ${selectMode ? 'active' : ''}`}
             onClick={toggleSelectMode}
@@ -258,10 +311,26 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
                       <button
                         className="card-action btn-icon"
                         style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)' }}
-                        onClick={(e) => { e.stopPropagation(); onSelectFile(file); }}
+                        onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}
                         title="Preview"
                       >
                         <Eye size={14} />
+                      </button>
+                      <button
+                        className="card-action btn-icon"
+                        style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)' }}
+                        onClick={(e) => promptSingleRename(file, e)}
+                        title="Rename"
+                      >
+                        <Edit2 size={14} />
+                      </button>
+                      <button
+                        className="card-action btn-icon"
+                        style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)' }}
+                        onClick={(e) => promptSingleMove(file, e)}
+                        title="Move"
+                      >
+                        <ArrowRightCircle size={14} />
                       </button>
                       <button
                         className="card-action btn-icon btn-delete"
@@ -346,10 +415,24 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
                     </button>
                     <button
                       style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
-                      onClick={(e) => { e.stopPropagation(); onSelectFile(file); }}
+                      onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}
                       title="Preview"
                     >
                       <Eye size={14} />
+                    </button>
+                    <button
+                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
+                      onClick={(e) => promptSingleRename(file, e)}
+                      title="Rename"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                    <button
+                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
+                      onClick={(e) => promptSingleMove(file, e)}
+                      title="Move"
+                    >
+                      <ArrowRightCircle size={14} />
                     </button>
                     <button
                       className="btn-delete"
@@ -497,6 +580,17 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
           </button>
 
           <button
+            className="fab-btn"
+            style={{ color: 'var(--text-1)' }}
+            onClick={promptMoveSelected}
+            disabled={selectedFiles.size === 0}
+            title="Move Selected"
+          >
+            <ArrowRightCircle size={16} />
+            <span className="fab-btn-label">Move</span>
+          </button>
+
+          <button
             className="fab-btn fab-download"
             onClick={handleDownloadZip}
             disabled={selectedFiles.size === 0}
@@ -518,6 +612,34 @@ export function FileExplorer({ files = [], isLoading, activeDrive, currentPath, 
             <span className="fab-btn-label">Delete</span>
           </button>
         </div>
+      )}
+
+      {renameModal && (
+        <RenameModal
+          activeDrive={activeDrive}
+          file={renameModal.file}
+          onClose={() => setRenameModal(null)}
+          onComplete={() => { setRenameModal(null); onRefresh(); }}
+        />
+      )}
+
+      {moveModal && (
+        <MoveModal
+          activeDrive={activeDrive}
+          pathsToMove={moveModal.paths}
+          onClose={() => setMoveModal(null)}
+          onComplete={() => { setMoveModal(null); clearSelection(); onRefresh(); }}
+        />
+      )}
+
+      {previewFile && (
+        <FilePreviewModal
+          initialFile={previewFile}
+          files={files}
+          selectedPaths={selectedFiles}
+          driveId={activeDrive.id}
+          onClose={() => setPreviewFile(null)}
+        />
       )}
     </div>
   );
