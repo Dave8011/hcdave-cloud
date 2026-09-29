@@ -53,11 +53,17 @@ if (fs.existsSync(envPath)) {
 }
 
 let GIT_HASH = '';
+let GIT_VERSION = '1.3.2';
 try {
   GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
+  const logMsg = execSync('git log --grep="^v[0-9]" -1 --format="%s"', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
+  const match = logMsg.match(/^v([0-9]+\.[0-9]+\.[0-9]+)/);
+  if (match) {
+    GIT_VERSION = match[1];
+  }
 } catch (e) {}
 
-const VERSION       = `1.3.2${GIT_HASH ? '-' + GIT_HASH : ''}`;
+const VERSION       = `${GIT_VERSION}${GIT_HASH ? '-' + GIT_HASH : ''}`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
