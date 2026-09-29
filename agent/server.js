@@ -193,26 +193,32 @@ async function updateDrives() {
 
     for (const sub of subs) {
       if (sub.toLowerCase() === 'cdrom') continue; // Skip cdrom
-      
+
       const fullPath = path.join(base, sub);
       try {
         const stat = fs.statSync(fullPath);
         if (!stat.isDirectory()) continue;
 
-        // Ensure the directory is an actual mount point (different device from parent)
+        // Must be a real mount point — different device ID from its parent directory
         const parentStat = fs.statSync(base);
         if (stat.dev === parentStat.dev) continue;
 
+        // Skip the OS/internal drive — any filesystem that shares the same
+        // device as root ('/') is the system disk (e.g. Dell Wyse 8 GB eMMC)
+        const rootStat = fs.statSync('/');
+        if (stat.dev === rootStat.dev) continue;
+
         let totalGB = 0, usedGB = 0, freeGB = 0;
         try {
-          const { stdout } = await execAsync(`df -B1G "${fullPath}" --output=size,used,avail 2>/dev/null | tail -n 1`, { timeout: 3000 });
+          // 2 s timeout — stale/removed drives hang df indefinitely
+          const { stdout } = await execAsync(`df -B1G "${fullPath}" --output=size,used,avail 2>/dev/null | tail -n 1`, { timeout: 2000 });
           const df = stdout.trim().split(/\s+/);
           totalGB = parseInt(df[0]) || 0;
           usedGB  = parseInt(df[1]) || 0;
           freeGB  = parseInt(df[2]) || 0;
         } catch (_) {}
 
-        if (totalGB === 0) continue; // skip empty/unresolved mounts
+        if (totalGB === 0) continue; // skip empty/stale/unresolved mounts
 
         drives.push({
           id:      `drive-${encodeURIComponent(sub)}`,
@@ -807,8 +813,12 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
     let pullOutput = '';
     let pullError = '';
 
-    // Step 1: Run git pull synchronously so we can report the actual result
+    // Step 1: Fix git ownership + run git pull
+    // The service runs as root but the repo may have been cloned as another user
+    // (root1), which causes 'cannot open .git/FETCH_HEAD: Permission denied'.
+    // Fix: take ownership of the repo dir, mark it safe, then pull.
     try {
+      execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' });
       execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
       pullOutput = execSync('git reset --hard HEAD && git pull --rebase=false', { cwd: repoDir, encoding: 'utf8' }).trim();
       console.log('📥 Git pull output:', pullOutput);
