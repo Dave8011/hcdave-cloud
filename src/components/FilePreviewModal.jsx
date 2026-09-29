@@ -87,6 +87,19 @@ export function FilePreviewModal({ initialFile, files = [], selectedPaths = new 
   const [intervalSec, setIntervalSec] = useState(3);
   const [cacheStatus, setCacheStatus] = useState('idle'); // idle | caching | done | error
 
+  // Preload next image for smoother transitions
+  useEffect(() => {
+    if (isSliderActive && list.length > 1) {
+      const nextIndex = (index + 1) % list.length;
+      const nextFile = list[nextIndex];
+      if (nextFile.type === 'image') {
+        const nextUrl = StorageService.getPreviewUrl(driveId, nextFile.path || nextFile.name);
+        const img = new Image();
+        img.src = nextUrl;
+      }
+    }
+  }, [index, isSliderActive, list, driveId]);
+
   useEffect(() => {
     let timer;
     if (isSlideshow && isSliderActive) {
@@ -233,9 +246,9 @@ export function FilePreviewModal({ initialFile, files = [], selectedPaths = new 
                   <span>{isSlideshow ? 'Pause' : 'Slideshow'}</span>
                 </button>
                 <select 
+                  className="custom-select"
                   value={intervalSec} 
                   onChange={e => setIntervalSec(Number(e.target.value))}
-                  style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text-2)', borderRadius: 'var(--r-xs)', padding: '4px 8px', fontSize: '0.8rem', cursor: 'pointer' }}
                 >
                   <option value={3}>3s</option>
                   <option value={5}>5s</option>

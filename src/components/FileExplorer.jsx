@@ -1,8 +1,8 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Folder, FileText, Image as Img, Film, Archive,
   Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen, Share2, RefreshCw,
-  CheckCircle2, Circle, Download, X, Trash2, CheckSquare, AlertTriangle, Edit2, ArrowRightCircle
+  CheckCircle2, Circle, Download, X, Trash2, CheckSquare, AlertTriangle, Edit2, ArrowRightCircle, MoreVertical
 } from 'lucide-react';
 import { ShareModal } from './ShareModal';
 import { MoveModal } from './MoveModal';
@@ -40,6 +40,13 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
   const [moveModal, setMoveModal] = useState(null);
   const [renameModal, setRenameModal] = useState(null);
   const [previewFile, setPreviewFile] = useState(null);
+  const [activeMenuId, setActiveMenuId] = useState(null);
+
+  useEffect(() => {
+    const handleGlobalClick = () => setActiveMenuId(null);
+    if (activeMenuId) window.addEventListener('click', handleGlobalClick);
+    return () => window.removeEventListener('click', handleGlobalClick);
+  }, [activeMenuId]);
 
   const longPressTimer = useRef(null);
   const didLongPress = useRef(false);
@@ -193,21 +200,12 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
 
         <div className="view-toggle">
           <select
+            className="custom-select"
             value={typeFilter}
             onChange={(e) => {
               setTypeFilter(e.target.value);
               setSelectedFiles(new Set());
               setSelectMode(false);
-            }}
-            style={{
-              background: 'transparent',
-              color: 'var(--text-3)',
-              border: 'none',
-              padding: '0 8px',
-              fontSize: '0.85rem',
-              outline: 'none',
-              cursor: 'pointer',
-              fontWeight: 500
             }}
           >
             <option value="all">All Types</option>
@@ -298,48 +296,26 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                     )}
                   </div>
                   {/* Desktop action buttons */}
+                  {/* Action Menu */}
                   {!selectMode && (
-                    <div className="desktop-only" style={{ display: 'flex', gap: 4 }}>
+                    <div className="card-action">
                       <button
-                        className="card-action btn-icon"
-                        style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)' }}
-                        onClick={(e) => { e.stopPropagation(); setShareFiles([file]); }}
-                        title="Share"
+                        className="btn-icon"
+                        style={{ padding: 4, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '50%', cursor: 'pointer', color: 'var(--text-2)', display: 'flex' }}
+                        onClick={(e) => { e.stopPropagation(); setActiveMenuId(activeMenuId === file.path ? null : file.path); }}
                       >
-                        <Share2 size={14} />
+                        <MoreVertical size={18} />
                       </button>
-                      <button
-                        className="card-action btn-icon"
-                        style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)' }}
-                        onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}
-                        title="Preview"
-                      >
-                        <Eye size={14} />
-                      </button>
-                      <button
-                        className="card-action btn-icon"
-                        style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)' }}
-                        onClick={(e) => promptSingleRename(file, e)}
-                        title="Rename"
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button
-                        className="card-action btn-icon"
-                        style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)' }}
-                        onClick={(e) => promptSingleMove(file, e)}
-                        title="Move"
-                      >
-                        <ArrowRightCircle size={14} />
-                      </button>
-                      <button
-                        className="card-action btn-icon btn-delete"
-                        style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)' }}
-                        onClick={(e) => promptSingleDelete(file, e)}
-                        title="Delete"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      
+                      {activeMenuId === file.path && (
+                        <div className="dropdown-menu" style={{ top: '100%', right: 0, marginTop: 4 }}>
+                          <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); setShareFiles([file]); }}><Share2 size={14}/> Share</button>
+                          <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); setPreviewFile(file); }}><Eye size={14}/> Preview</button>
+                          <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleRename(file, e); }}><Edit2 size={14}/> Rename</button>
+                          <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleMove(file, e); }}><ArrowRightCircle size={14}/> Move</button>
+                          <button className="dropdown-item danger" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleDelete(file, e); }}><Trash2 size={14}/> Delete</button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -405,43 +381,24 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                 <div className="list-meta" style={{ flexShrink: 0 }}>{file.size}</div>
 
                 {!selectMode && (
-                  <div className="list-actions desktop-only" onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 4 }}>
+                  <div className="list-actions" onClick={(e) => e.stopPropagation()} style={{ position: 'relative' }}>
                     <button
-                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
-                      onClick={(e) => { e.stopPropagation(); setShareFiles([file]); }}
-                      title="Share"
+                      className="btn-icon"
+                      style={{ padding: 4, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
+                      onClick={(e) => { e.stopPropagation(); setActiveMenuId(activeMenuId === file.path ? null : file.path); }}
                     >
-                      <Share2 size={14} />
+                      <MoreVertical size={18} />
                     </button>
-                    <button
-                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
-                      onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}
-                      title="Preview"
-                    >
-                      <Eye size={14} />
-                    </button>
-                    <button
-                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
-                      onClick={(e) => promptSingleRename(file, e)}
-                      title="Rename"
-                    >
-                      <Edit2 size={14} />
-                    </button>
-                    <button
-                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
-                      onClick={(e) => promptSingleMove(file, e)}
-                      title="Move"
-                    >
-                      <ArrowRightCircle size={14} />
-                    </button>
-                    <button
-                      className="btn-delete"
-                      style={{ padding: 6, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 'var(--r-xs)', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
-                      onClick={(e) => promptSingleDelete(file, e)}
-                      title="Delete"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    
+                    {activeMenuId === file.path && (
+                      <div className="dropdown-menu" style={{ top: '100%', right: 0, marginTop: 4 }}>
+                        <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); setShareFiles([file]); }}><Share2 size={14}/> Share</button>
+                        <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); setPreviewFile(file); }}><Eye size={14}/> Preview</button>
+                        <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleRename(file, e); }}><Edit2 size={14}/> Rename</button>
+                        <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleMove(file, e); }}><ArrowRightCircle size={14}/> Move</button>
+                        <button className="dropdown-item danger" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleDelete(file, e); }}><Trash2 size={14}/> Delete</button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -580,8 +537,7 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
           </button>
 
           <button
-            className="fab-btn"
-            style={{ color: 'var(--text-1)' }}
+            className="fab-btn fab-move"
             onClick={promptMoveSelected}
             disabled={selectedFiles.size === 0}
             title="Move Selected"
