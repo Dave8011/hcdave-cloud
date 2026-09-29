@@ -85,35 +85,9 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
     setUploadError('');
 
     try {
-      // Collect all unique subdirectories needed
-      const subPaths = new Set();
-      for (const file of files) {
-        const rel = file._relativePath || file.webkitRelativePath || '';
-        if (rel.includes('/')) {
-          const dirPart = rel.substring(0, rel.lastIndexOf('/'));
-          const parts = dirPart.split('/');
-          let cumulative = (currentPath || '/').replace(/\/$/, '');
-          for (const part of parts) {
-            if (!part) continue;
-            cumulative = `${cumulative}/${part}`;
-            subPaths.add(cumulative);
-          }
-        }
-      }
-
-      // Create directories shallowest-first
-      const sortedPaths = Array.from(subPaths).sort((a, b) => a.split('/').length - b.split('/').length);
-      for (const sp of sortedPaths) {
-        const parent = sp.substring(0, sp.lastIndexOf('/')) || '/';
-        const folderName = sp.substring(sp.lastIndexOf('/') + 1);
-        if (folderName) {
-          try {
-            await StorageService.createFolder(activeDrive.id, parent, folderName);
-          } catch (e) {
-            if (!e.message?.includes('already exists')) throw e;
-          }
-        }
-      }
+      // The backend (server.js /api/upload-complete) automatically creates 
+      // parent directories recursively using fs.mkdirSync(..., { recursive: true }).
+      // There is no need to make hundreds of sequential HTTP requests to pre-create folders!
 
       // Upload all files to their correct paths
       for (let i = 0; i < files.length; i++) {
