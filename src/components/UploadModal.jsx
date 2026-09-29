@@ -42,6 +42,14 @@ function getSubPath(file, basePath) {
   return `${base}/${dirPart}`;
 }
 
+function formatSize(bytes) {
+  if (bytes == null || isNaN(bytes)) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / (1024 ** 2)).toFixed(1)} MB`;
+  return `${(bytes / (1024 ** 3)).toFixed(2)} GB`;
+}
+
 export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplete }) {
   const [files, setFiles] = useState([]);
   const [progress, setProgress] = useState(0);
@@ -188,7 +196,7 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', padding: '6px 10px', background: 'var(--bg-card)', borderRadius: 'var(--r-xs)' }}>
                       <FileIcon size={14} color="var(--text-3)" />
                       <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{rel}</span>
-                      <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{(f.size / (1024 * 1024)).toFixed(1)} MB</span>
+                      <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{formatSize(f.size)}</span>
                     </div>
                   );
                 })}
