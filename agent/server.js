@@ -59,9 +59,8 @@ try {
   GIT_COUNT = execSync('git rev-list --count HEAD', { cwd: __dirname, stdio: 'pipe' }).toString().trim();
 } catch (e) {}
 
-// Truly automatic versioning based on commit count. 
-// Every git commit automatically bumps the version number (e.g. 1.4.52)
-const VERSION = `1.4.${GIT_COUNT}${GIT_HASH ? '-' + GIT_HASH : ''}`;
+// Hardcoded version per user request
+const VERSION = `1.4.0`;
 const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
