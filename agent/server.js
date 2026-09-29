@@ -213,23 +213,37 @@ async function updateDrives() {
         const rootStat = fs.statSync('/');
         if (stat.dev === rootStat.dev) continue;
 
-        let totalGB = 0, usedGB = 0, freeGB = 0;
+        let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = '';
         try {
           // 2 s timeout — stale/removed drives hang df indefinitely
-          const { stdout } = await execAsync(`df -B1G "${fullPath}" --output=size,used,avail 2>/dev/null | tail -n 1`, { timeout: 2000 });
+          const { stdout } = await execAsync(`df -B1G "${fullPath}" --output=size,used,avail,source 2>/dev/null | tail -n 1`, { timeout: 2000 });
           const df = stdout.trim().split(/\s+/);
           totalGB = parseInt(df[0]) || 0;
           usedGB  = parseInt(df[1]) || 0;
           freeGB  = parseInt(df[2]) || 0;
+          sourceDev = df[3] || '';
         } catch (_) {}
 
         if (totalGB === 0) continue; // skip empty/stale/unresolved mounts
+
+        // Determine if SSD/HDD by checking the block device's rotational flag
+        let isSSD = sub.toLowerCase().includes('ssd') || sub.toLowerCase().includes('nvme');
+        if (!isSSD && sourceDev.startsWith('/dev/')) {
+          // Extract base block device name (e.g. sdb1 -> sdb, nvme0n1p1 -> nvme0n1)
+          const match = sourceDev.match(/^\/dev\/(sd[a-z]|nvme\d+n\d+|mmcblk\d+|vd[a-z])/);
+          if (match) {
+            try {
+              const rot = fs.readFileSync(`/sys/block/${match[1]}/queue/rotational`, 'utf8').trim();
+              if (rot === '0') isSSD = true;
+            } catch (_) {}
+          }
+        }
 
         drives.push({
           id:      `drive-${encodeURIComponent(sub)}`,
           name:    sub.replace(/[_-]+/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
           mount:   fullPath,
-          type:    sub.toLowerCase().includes('ssd') || sub.toLowerCase().includes('nvme') ? 'SSD' : 'HDD',
+          type:    isSSD ? 'SSD' : 'HDD',
           totalGB,
           usedGB,
           freeGB,
