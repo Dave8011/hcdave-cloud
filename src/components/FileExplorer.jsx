@@ -264,7 +264,7 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
               <div
                 key={file.id || file.path}
                 className={`file-card ${isSelected ? 'selected' : ''}`}
-                style={{ position: 'relative', userSelect: 'none' }}
+                style={{ position: 'relative', userSelect: 'none', zIndex: activeMenuId === file.path ? 100 : undefined }}
                 onClick={() => handleCardClick(file)}
                 onMouseDown={() => onPressStart(file)}
                 onMouseUp={onPressEnd}
@@ -343,7 +343,7 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
               <div
                 key={file.id || file.path}
                 className={`list-row ${isSelected ? 'selected' : ''}`}
-                style={{ animationDelay: `${i * 0.04}s`, userSelect: 'none' }}
+                style={{ animationDelay: `${i * 0.04}s`, userSelect: 'none', zIndex: activeMenuId === file.path ? 100 : undefined, position: 'relative' }}
                 onClick={() => handleCardClick(file)}
                 onMouseDown={() => onPressStart(file)}
                 onMouseUp={onPressEnd}
