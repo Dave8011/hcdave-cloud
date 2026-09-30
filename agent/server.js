@@ -346,7 +346,7 @@ app.get('/health', (_, res) => {
   const load = os.loadavg()[0].toFixed(2);
   let lastUpdated = 'Unknown';
   try {
-    lastUpdated = execSync('git log -1 --format="%cd" --date=short', { cwd: '/home/root1/hcdave-cloud', encoding: 'utf8' }).trim();
+    lastUpdated = execSync('git log -1 --format="%cd - %s" --date=short', { cwd: '/home/root1/hcdave-cloud', encoding: 'utf8' }).trim();
   } catch (_) {}
 
   res.json({ 
