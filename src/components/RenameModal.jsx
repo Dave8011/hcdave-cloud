@@ -42,17 +42,16 @@ export function RenameModal({ activeDrive, file, onClose, onComplete }) {
           </button>
         </div>
         
-        <form onSubmit={handleRename} style={{ padding: '24px' }}>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-3)', marginBottom: 6 }}>
-              New Name for <strong>{file.name}</strong>
+        <form onSubmit={handleRename}>
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-3)', marginBottom: 8 }}>
+              New Name for <span style={{ color: 'var(--text-1)' }}>{file.name}</span>
             </label>
             <input
               type="text"
               value={newName}
               onChange={e => setNewName(e.target.value)}
-              className="txt-input"
-              style={{ width: '100%' }}
+              className="input"
               autoFocus
               disabled={isRenaming}
             />
