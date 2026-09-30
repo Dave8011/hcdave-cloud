@@ -706,6 +706,7 @@ body::before {
 .card-action {
   opacity: 0;
   transition: var(--transition);
+  position: relative;
 }
 .file-card:hover .card-action { opacity: 1; }
 
@@ -1280,28 +1281,28 @@ body::before {
 .dropdown-menu {
   position: absolute;
   z-index: 9999;
-  background: rgba(23, 25, 33, 0.85);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(30, 32, 43, 0.9), rgba(20, 22, 28, 0.95));
+  backdrop-filter: blur(32px) saturate(200%);
+  -webkit-backdrop-filter: blur(32px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
   box-shadow: 
-    0 0 0 1px rgba(255, 255, 255, 0.02) inset,
-    0 10px 40px -10px rgba(0,0,0,0.5),
-    0 4px 12px -4px rgba(0,0,0,0.3);
-  padding: 6px;
-  min-width: 170px;
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+    0 20px 40px -10px rgba(0,0,0,0.8),
+    0 0 30px rgba(99, 102, 241, 0.15);
+  padding: 8px;
+  min-width: 180px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   transform-origin: top right;
-  animation: dropdown-enter 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: dropdown-enter 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes dropdown-enter {
   from {
     opacity: 0;
-    transform: scale(0.96) translateY(-8px);
+    transform: scale(0.9) translateY(-10px);
   }
   to {
     opacity: 1;
@@ -1312,29 +1313,31 @@ body::before {
 .dropdown-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  gap: 14px;
+  padding: 12px 16px;
+  border-radius: 10px;
   background: transparent;
   border: none;
   color: var(--text-1);
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: 0.95rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   text-align: left;
   width: 100%;
 }
 .dropdown-item svg {
-  color: var(--text-2);
-  transition: color 0.15s ease;
+  color: var(--indigo);
+  transition: transform 0.2s ease, color 0.2s ease;
 }
 .dropdown-item:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(99, 102, 241, 0.15);
   color: #fff;
+  transform: translateX(4px);
 }
 .dropdown-item:hover svg {
   color: #fff;
+  transform: scale(1.15);
 }
 .dropdown-item.danger { color: #ff5f57; }
 .dropdown-item.danger svg { color: #ff5f57; }
