@@ -46,11 +46,11 @@ export function SettingsModal({ onClose, onSave, drives }) {
       const poll = setInterval(async () => {
         try {
           const data = await StorageService.getHealth();
-          if (data && data.version && data.version !== agentVersion) {
+          if (data && data.version && data.version !== 'unknown' && data.version !== agentVersion) {
             clearInterval(poll);
             setAgentVersion(data.version);
             setLastUpdated(data.lastUpdated || 'Unknown');
-            setUpdateMsg(`✅ Update complete! Running new version.\nLatest: ${data.lastUpdated}`);
+            setUpdateMsg(`✅ Update complete! Running new version.\nLatest: ${data.lastUpdated || 'Unknown'}`);
             setIsUpdating(false);
           }
         } catch (_) {}
