@@ -50,7 +50,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
             clearInterval(poll);
             setAgentVersion(data.version);
             setLastUpdated(data.lastUpdated || 'Unknown');
-            setUpdateMsg('✅ Update complete! Running new version.');
+            setUpdateMsg(`✅ Update complete! Running new version.\nLatest: ${data.lastUpdated}`);
             setIsUpdating(false);
           }
         } catch (_) {}
