@@ -174,7 +174,8 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
   };
 
   const pathParts = currentPath === '/' ? [] : currentPath.split('/').filter(Boolean);
-  const allSelected = files.length > 0 && selectedFiles.size === files.length;
+  const displayFiles = files.filter(f => f.name !== '.hcdave-chunks');
+  const allSelected = displayFiles.length > 0 && selectedFiles.size === displayFiles.length;
 
   return (
     <div>
@@ -242,7 +243,7 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
       )}
 
       {/* Empty */}
-      {!isLoading && files.length === 0 && (
+      {!isLoading && displayFiles.length === 0 && (
         <div className="empty-state">
           <div className="empty-icon"><FolderOpen size={36} /></div>
           <div className="empty-title">This folder is empty</div>
@@ -255,9 +256,9 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
       )}
 
       {/* ── Grid View ── */}
-      {!isLoading && files.length > 0 && view === 'grid' && (
+      {!isLoading && displayFiles.length > 0 && view === 'grid' && (
         <div className="file-grid">
-          {files.map((file) => {
+          {displayFiles.map((file) => {
             const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;
             const isSelected = selectedFiles.has(file.path);
             return (
@@ -301,10 +302,10 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                     <div className="card-action">
                       <button
                         className="btn-icon"
-                        style={{ padding: 4, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '50%', cursor: 'pointer', color: 'var(--text-2)', display: 'flex' }}
+                        style={{ padding: 4, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-3)', display: 'flex' }}
                         onClick={(e) => { e.stopPropagation(); setActiveMenuId(activeMenuId === file.path ? null : file.path); }}
                       >
-                        <MoreVertical size={18} />
+                        <MoreVertical size={24} />
                       </button>
                       
                       {activeMenuId === file.path && (
@@ -334,9 +335,9 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
       )}
 
       {/* ── List View ── */}
-      {!isLoading && files.length > 0 && view === 'list' && (
+      {!isLoading && displayFiles.length > 0 && view === 'list' && (
         <div className="file-list">
-          {files.map((file, i) => {
+          {displayFiles.map((file, i) => {
             const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;
             const isSelected = selectedFiles.has(file.path);
             return (
