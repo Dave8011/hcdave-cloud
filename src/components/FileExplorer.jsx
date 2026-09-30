@@ -20,6 +20,14 @@ const TYPE_MAP = {
 
 const LONG_PRESS_MS = 500;
 
+function formatSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
 export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, currentPath, setCurrentPath, onRefresh }) {
   const [typeFilter, setTypeFilter] = useState('all');
   
@@ -324,7 +332,12 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                 <div className="card-bottom">
                   <div className="card-name" title={file.name}>{file.name}</div>
                   <div className="card-meta">
-                    <span>{file.type === 'folder' && file.items ? `${file.items} items` : file.size}</span>
+                    <span>
+                      {file.type === 'folder'
+                        ? (file.items !== undefined ? `${file.items} items` : 'Folder')
+                        : (file.size === 'Unknown' ? file.type.charAt(0).toUpperCase() + file.type.slice(1) : file.size)
+                      }
+                    </span>
                     <span>{file.modified}</span>
                   </div>
                 </div>
@@ -379,7 +392,12 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                   {file.name}
                 </div>
                 <div className="list-meta" style={{ flexShrink: 0 }}>{file.modified}</div>
-                <div className="list-meta" style={{ flexShrink: 0 }}>{file.size}</div>
+                <div className="list-meta" style={{ flexShrink: 0 }}>
+                  {file.type === 'folder'
+                    ? (file.items !== undefined ? `${file.items} items` : 'Folder')
+                    : (file.size === 'Unknown' ? file.type.charAt(0).toUpperCase() + file.type.slice(1) : file.size)
+                  }
+                </div>
 
                 {!selectMode && (
                   <div className="list-actions" onClick={(e) => e.stopPropagation()} style={{ position: 'relative' }}>
@@ -568,6 +586,17 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
             <Trash2 size={16} />
             <span className="fab-btn-label">Delete</span>
           </button>
+
+          <div style={{ flex: 1 }} />
+          <div className="selection-stats" style={{ color: 'var(--text-2)', fontSize: '0.85rem', fontWeight: 500, paddingRight: 16 }}>
+            {selectedFiles.size} item{selectedFiles.size !== 1 ? 's' : ''} selected
+            {(() => {
+              const totalBytes = displayFiles
+                .filter(f => selectedFiles.has(f.path))
+                .reduce((sum, f) => sum + (f.rawSize || 0), 0);
+              return totalBytes > 0 ? ` • ${formatSize(totalBytes)}` : '';
+            })()}
+          </div>
         </div>
       )}
 

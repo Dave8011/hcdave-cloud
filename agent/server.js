@@ -402,12 +402,22 @@ app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
           
           let size = isDir ? 'Folder' : 'Unknown';
           let modified = '';
+          let rawSize = 0;
+          let items;
 
-          if (!isDir && !skipStat) {
+          if (!skipStat) {
              const full = path.join(targetDir, name);
-             const st = await fs.promises.stat(full);
-             size = formatSize(st.size);
-             modified = st.mtime.toISOString().split('T')[0];
+             try {
+               const st = await fs.promises.stat(full);
+               modified = st.mtime.toISOString().split('T')[0];
+               if (!isDir) {
+                 size = formatSize(st.size);
+                 rawSize = st.size;
+               } else {
+                 const dirItems = await fs.promises.readdir(full);
+                 items = dirItems.length;
+               }
+             } catch (e) {}
           }
 
           return {
@@ -415,6 +425,8 @@ app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
             name,
             type,
             size,
+            rawSize,
+            items,
             modified,
             path:     relPath,
             streamUrl: null,

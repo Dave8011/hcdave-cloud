@@ -4,6 +4,7 @@
    DESIGN TOKENS
    ───────────────────────────────────────────── */
 :root {
+  color-scheme: dark;
   --bg-base:       #07090f;
   --bg-surface:    #0d1117;
   --bg-card:       rgba(255,255,255,0.04);
@@ -1249,6 +1250,10 @@ body::before {
     top: 4px;
     right: 4px;
   }
+  .dropdown-menu {
+    min-width: 140px;
+    right: -8px !important;
+  }
   .file-card .card-bottom {
     align-items: center;
     text-align: center;
@@ -1282,6 +1287,10 @@ body::before {
   transition: var(--transition);
 }
 .custom-select:hover { border-color: var(--text-3); }
+.custom-select option {
+  background-color: var(--bg-surface);
+  color: var(--text-1);
+}
 
 /* ── Action Dropdown Menu ── */
 .dropdown-menu {
