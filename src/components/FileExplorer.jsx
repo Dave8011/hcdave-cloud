@@ -338,7 +338,6 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                         : (file.size === 'Unknown' ? file.type.charAt(0).toUpperCase() + file.type.slice(1) : file.size)
                       }
                     </span>
-                    <span>{file.modified}</span>
                   </div>
                 </div>
               </div>
@@ -356,7 +355,7 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
             return (
               <div
                 key={file.id || file.path}
-                className={`list-row ${isSelected ? 'selected' : ''}`}
+                className={`list-row ${isSelected ? 'selected' : ''} ${selectMode ? 'is-select-mode' : ''}`}
                 style={{ animationDelay: `${i * 0.04}s`, userSelect: 'none', zIndex: activeMenuId === file.path ? 100 : undefined, position: 'relative' }}
                 onClick={() => handleCardClick(file)}
                 onMouseDown={() => onPressStart(file)}
@@ -391,7 +390,6 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                 <div className="list-name" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {file.name}
                 </div>
-                <div className="list-meta" style={{ flexShrink: 0 }}>{file.modified}</div>
                 <div className="list-meta" style={{ flexShrink: 0 }}>
                   {file.type === 'folder'
                     ? (file.items !== undefined ? `${file.items} items` : 'Folder')

@@ -754,12 +754,15 @@ body::before {
   border-radius: var(--r-sm);
   padding: 11px 16px;
   display: grid;
-  grid-template-columns: 36px 2fr 1fr 1fr 70px;
+  grid-template-columns: 36px 1fr 70px 40px;
   align-items: center;
   gap: 14px;
   cursor: pointer;
   transition: var(--transition);
   animation: slideInRightRow 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.list-row.is-select-mode {
+  grid-template-columns: 36px 36px 1fr 70px;
 }
 
 /* Staggered animation for list rows */
