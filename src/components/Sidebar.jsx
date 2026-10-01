@@ -54,7 +54,14 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
                       </span>
                       <span className="drive-label">{drive.name}</span>
                     </div>
-                    <span className="drive-tag">{drive.type}</span>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {drive.role && (
+                        <span className="drive-tag" style={{ background: 'var(--indigo)', color: 'white', border: 'none' }}>
+                          {drive.role}
+                        </span>
+                      )}
+                      <span className="drive-tag">{drive.type}</span>
+                    </div>
                   </div>
 
                   <div className="prog-bg">

@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database } from 'lucide-react';
+import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database, HardDrive } from 'lucide-react';
 import { StorageService } from '../services/api';
 import { CachePanel } from './CachePanel';
 
 export function SettingsModal({ onClose, onSave, drives }) {
-  const [tab, setTab]               = useState('connection'); // 'connection' | 'cache'
+  const [tab, setTab]               = useState('connection'); // 'connection' | 'cache' | 'drives'
   const [agentUrl, setAgentUrl]     = useState(StorageService.getAgentUrl());
   const [saved, setSaved]           = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -15,6 +15,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
   const [lastUpdated, setLastUpdated] = useState('');
   const [stats, setStats]           = useState(null);
   const [cacheWarn, setCacheWarn]   = useState(false);
+  const [driveRoles, setDriveRoles] = useState({});
 
   useEffect(() => {
     StorageService.getHealth().then(data => {
@@ -27,10 +28,15 @@ export function SettingsModal({ onClose, onSave, drives }) {
     StorageService.getCacheStatus().then(cs => {
       setCacheWarn(cs.warn || false);
     }).catch(() => {});
+    // Fetch drive roles
+    StorageService.getDriveRoles().then(roles => {
+      setDriveRoles(roles || {});
+    });
   }, []);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     StorageService.setAgentUrl(agentUrl);
+    await StorageService.updateDriveRoles(driveRoles);
     setSaved(true);
     setTimeout(() => { onSave(); onClose(); }, 800);
   };
@@ -63,6 +69,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
 
   const TABS = [
     { key: 'connection', label: 'Connection', Icon: Globe },
+    { key: 'drives',     label: 'Drives',     Icon: HardDrive },
     { key: 'cache',      label: 'Video Cache', Icon: Database, badge: cacheWarn },
   ];
 
@@ -197,6 +204,58 @@ export function SettingsModal({ onClose, onSave, drives }) {
 
         {/* Cache Tab */}
         {tab === 'cache' && <CachePanel drives={drives} />}
+
+        {/* Drives Tab */}
+        {tab === 'drives' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ padding: '14px', background: 'var(--bg-2)', borderRadius: 'var(--r-sm)', marginBottom: 10 }}>
+              <div style={{ fontWeight: 600, marginBottom: 15 }}>Drive Roles Configuration</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-2)', marginBottom: 20 }}>
+                Assign permanent roles to your plugged-in drives. HC Cloud identifies drives by their unique hardware UUID, so these roles will persist across reboots and USB port changes.
+              </div>
+              
+              {drives.length === 0 ? (
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-3)' }}>No drives detected.</div>
+              ) : (
+                drives.map(d => (
+                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                    <div>
+                      <div style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--text-1)' }}>{d.name}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'monospace' }}>{d.uuid || d.id} • {d.type} • {d.totalGB} GB</div>
+                    </div>
+                    <select
+                      value={driveRoles[d.uuid || d.id] || ''}
+                      onChange={e => setDriveRoles({ ...driveRoles, [d.uuid || d.id]: e.target.value })}
+                      style={{
+                        padding: '6px 12px',
+                        background: 'var(--bg-1)',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text-1)',
+                        borderRadius: 6,
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <option value="">None</option>
+                      <option value="Master">Master</option>
+                      <option value="Gallery">Gallery</option>
+                      <option value="Portable">Portable</option>
+                      <option value="Backup">Backup</option>
+                      <option value="Cache">Cache</option>
+                    </select>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
+              <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave}>
+                <Check size={16} /><span>{saved ? 'Saved!' : 'Save Drive Roles'}</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

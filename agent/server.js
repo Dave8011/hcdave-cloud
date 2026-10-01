@@ -179,6 +179,17 @@ async function updateDrives() {
   const drives = [];
   const searchDirs = ['/mnt', '/media'];
 
+  // Read drive roles
+  let driveRoles = {};
+  try {
+    const rolesPath = path.join(__dirname, 'drive_roles.json');
+    if (fs.existsSync(rolesPath)) {
+      driveRoles = JSON.parse(fs.readFileSync(rolesPath, 'utf8'));
+    }
+  } catch (e) {
+    console.error('Failed to read drive roles:', e);
+  }
+
   // Also check /run/media/<username>
   try {
     const runMedia = '/run/media';
@@ -214,7 +225,7 @@ async function updateDrives() {
         const rootStat = fs.statSync('/');
         if (stat.dev === rootStat.dev) continue;
 
-        let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = '';
+        let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = '', uuid = '';
         try {
           // 2 s timeout — stale/removed drives hang df indefinitely
           const { stdout } = await execAsync(`df -B1G "${fullPath}" --output=size,used,avail,source 2>/dev/null | tail -n 1`, { timeout: 2000 });
@@ -223,6 +234,13 @@ async function updateDrives() {
           usedGB  = parseInt(df[1]) || 0;
           freeGB  = parseInt(df[2]) || 0;
           sourceDev = df[3] || '';
+          
+          if (sourceDev.startsWith('/dev/')) {
+            try {
+              const { stdout: blkidOut } = await execAsync(`blkid -s UUID -o value "${sourceDev}"`, { timeout: 1000 });
+              uuid = blkidOut.trim();
+            } catch (_) {}
+          }
         } catch (_) {}
 
         if (totalGB === 0) continue; // skip empty/stale/unresolved mounts
@@ -239,12 +257,17 @@ async function updateDrives() {
             } catch (_) {}
           }
         }
+        
+        const stableId = uuid || `drive-${encodeURIComponent(sub)}`;
+        const role = driveRoles[stableId] || driveRoles[`drive-${encodeURIComponent(sub)}`] || null;
 
         drives.push({
-          id:      `drive-${encodeURIComponent(sub)}`,
+          id:      stableId,
+          uuid:    uuid,
           name:    sub.replace(/[_-]+/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
           mount:   fullPath,
           type:    isSSD ? 'SSD' : 'HDD',
+          role:    role,
           totalGB,
           usedGB,
           freeGB,
@@ -364,6 +387,36 @@ app.get('/api/drives', rateLimitAuth, auth, (_, res) => {
   const drives = getMountedDrives();
   const publicToken = crypto.createHash('md5').update(AUTH_PASSWORD).digest('hex');
   res.json({ status: 'online', domain: 'hcdavecloud.in', drivesCount: drives.length, drives, publicToken });
+});
+
+// GET /api/drive-roles
+app.get('/api/drive-roles', rateLimitAuth, auth, (req, res) => {
+  try {
+    const rolesPath = path.join(__dirname, 'drive_roles.json');
+    if (fs.existsSync(rolesPath)) {
+      res.json(JSON.parse(fs.readFileSync(rolesPath, 'utf8')));
+    } else {
+      res.json({});
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/drive-roles
+app.post('/api/drive-roles', rateLimitAuth, auth, (req, res) => {
+  try {
+    const roles = req.body;
+    if (typeof roles !== 'object') return res.status(400).json({ error: 'Expected object' });
+    
+    const rolesPath = path.join(__dirname, 'drive_roles.json');
+    fs.writeFileSync(rolesPath, JSON.stringify(roles, null, 2), 'utf8');
+    
+    updateDrives(); // Trigger immediate update so next /api/drives call sees them
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // GET /api/files
@@ -754,6 +807,30 @@ app.post('/api/upload-complete', rateLimitAuth, auth, async (req, res) => {
 // POST /api/upload (legacy single-file route — kept for small files < 100 MB)
 app.post('/api/upload', rateLimitAuth, auth, upload.array('file', 50), (req, res) => {
   res.json({ success: true, uploaded: req.files?.length || 0 });
+});
+
+// POST /api/scanner/upload
+app.post('/api/scanner/upload', rateLimitAuth, auth, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  const scanRoot = process.env.HC_SCAN_ROOT || path.join(os.homedir(), 'dev', 'drive-wifi', 'Scans');
+  
+  try {
+    if (!fs.existsSync(scanRoot)) {
+      fs.mkdirSync(scanRoot, { recursive: true });
+    }
+    
+    // multer stored it in req.file.path (usually where it was meant to go, but we need to move it)
+    // Wait, the default multer instance `upload` uses `multerStorage` which saves to a path based on req.body.path
+    // If req.body.path isn't provided, it might fail or save in root.
+    // Let's just manually move the uploaded file to scanRoot.
+    const finalPath = path.join(scanRoot, req.file.originalname);
+    fs.renameSync(req.file.path, finalPath);
+    
+    res.json({ success: true, path: finalPath });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/mkdir
