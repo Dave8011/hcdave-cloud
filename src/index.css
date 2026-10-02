@@ -1525,3 +1525,7 @@ select option {
   background: var(--bg-1);
   color: var(--text-1);
 }
+
+select {
+  color-scheme: dark;
+}

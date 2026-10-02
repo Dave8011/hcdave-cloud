@@ -217,7 +217,12 @@ export function SettingsModal({ onClose, onSave, drives }) {
               {drives.length === 0 ? (
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-3)' }}>No drives detected.</div>
               ) : (
-                drives.map(d => (
+                [...drives].sort((a, b) => {
+                  const roleA = driveRoles[a.uuid || a.id] || '';
+                  const roleB = driveRoles[b.uuid || b.id] || '';
+                  const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5, '': 6 };
+                  return (roleOrder[roleA] || 99) - (roleOrder[roleB] || 99);
+                }).map(d => (
                   <div key={d.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
                     <div>
                       <div style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--text-1)' }}>{d.name}</div>
