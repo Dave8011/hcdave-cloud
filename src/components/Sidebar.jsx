@@ -32,7 +32,10 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
               <div>Plug in a USB HDD or SSD and refresh the page.</div>
             </div>
           ) : (
-            drives.map((drive, i) => {
+            [...drives].sort((a, b) => {
+              const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5 };
+              return (roleOrder[a.role] || 99) - (roleOrder[b.role] || 99);
+            }).map((drive, i) => {
               const pct = Math.min(100, Math.round((drive.usedGB / drive.totalGB) * 100));
               const isActive = drive.id === activeDriveId;
               const isSSD = drive.type === 'SSD';
