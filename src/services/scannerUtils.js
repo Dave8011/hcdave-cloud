@@ -11,6 +11,17 @@ export const loadOpenCV = () => {
   }
 
   cvPromise = new Promise((resolve, reject) => {
+    let hasResolved = false;
+    
+    // Add a timeout to prevent infinite loading
+    const timeout = setTimeout(() => {
+      if (!hasResolved) {
+        hasResolved = true;
+        console.warn("OpenCV load timed out, proceeding without it");
+        resolve(null);
+      }
+    }, 5000);
+
     const script = document.createElement('script');
     script.src = 'https://docs.opencv.org/4.8.0/opencv.js';
     script.async = true;
@@ -19,21 +30,23 @@ export const loadOpenCV = () => {
       if (window.cv instanceof Promise) {
         window.cv.then(target => {
           window.cv = target;
-          resolve(window.cv);
-        }).catch(reject);
+          if (!hasResolved) { hasResolved = true; resolve(window.cv); clearTimeout(timeout); }
+        }).catch(e => {
+          if (!hasResolved) { hasResolved = true; reject(e); clearTimeout(timeout); }
+        });
       } else {
         // Wait for it to be ready
         const checkReady = setInterval(() => {
           if (window.cv && window.cv.Mat) {
             clearInterval(checkReady);
-            resolve(window.cv);
+            if (!hasResolved) { hasResolved = true; resolve(window.cv); clearTimeout(timeout); }
           }
         }, 100);
       }
     };
     script.onerror = () => {
       cvPromise = null;
-      reject(new Error('Failed to load OpenCV'));
+      if (!hasResolved) { hasResolved = true; reject(new Error('Failed to load OpenCV')); clearTimeout(timeout); }
     };
     document.body.appendChild(script);
   });
