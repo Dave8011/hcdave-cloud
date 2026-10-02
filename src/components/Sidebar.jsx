@@ -63,7 +63,6 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
                           {drive.role}
                         </span>
                       )}
-                      <span className="drive-tag">{drive.type}</span>
                     </div>
                   </div>
 

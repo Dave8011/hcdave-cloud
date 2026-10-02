@@ -1594,7 +1594,7 @@ function getCacheStats() {
   // Build per-drive cache stats
   const driveStats = {};
   for (const d of drives) {
-    driveStats[d.id] = { driveId: d.id, name: d.name, total: 0, cached: 0 };
+    driveStats[d.id] = { driveId: d.id, name: d.name, role: d.role, total: 0, cached: 0 };
   }
 
   // Count total videos per drive

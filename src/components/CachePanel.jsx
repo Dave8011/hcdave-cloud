@@ -157,7 +157,7 @@ export function CachePanel({ drives }) {
                       }}
                       style={{ accentColor: 'var(--indigo)', width: 14, height: 14 }}
                     />
-                    {d.name}
+                    {d.role ? `${d.role} (${d.name})` : d.name}
                   </label>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>
                     {d.cached} / {d.total} videos cached
@@ -300,7 +300,7 @@ export function CachePanel({ drives }) {
                 }}
               >
                 <HardDrive size={13} />
-                <span style={{ flex: 1 }}>{d.name}</span>
+                <span style={{ flex: 1 }}>{d.role ? `${d.role} (${d.name})` : d.name}</span>
                 <span style={{ color: 'var(--text-3)', fontSize: '0.72rem' }}>{d.freeGB} GB free · {d.totalGB} GB</span>
                 {status?.cacheMount === d.mount && <CheckCircle2 size={13} color="var(--emerald)" />}
               </button>
