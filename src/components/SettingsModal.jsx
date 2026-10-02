@@ -241,12 +241,12 @@ export function SettingsModal({ onClose, onSave, drives }) {
                         cursor: 'pointer'
                       }}
                     >
-                      <option value="">None</option>
-                      <option value="Master">Master</option>
-                      <option value="Gallery">Gallery</option>
-                      <option value="Portable">Portable</option>
-                      <option value="Backup">Backup</option>
-                      <option value="Cache">Cache</option>
+                      <option value="" style={{ background: '#1e1e1e', color: '#fff' }}>None</option>
+                      <option value="Master" style={{ background: '#1e1e1e', color: '#fff' }}>Master</option>
+                      <option value="Gallery" style={{ background: '#1e1e1e', color: '#fff' }}>Gallery</option>
+                      <option value="Portable" style={{ background: '#1e1e1e', color: '#fff' }}>Portable</option>
+                      <option value="Backup" style={{ background: '#1e1e1e', color: '#fff' }}>Backup</option>
+                      <option value="Cache" style={{ background: '#1e1e1e', color: '#fff' }}>Cache</option>
                     </select>
                   </div>
                 ))

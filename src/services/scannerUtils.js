@@ -45,7 +45,17 @@ export const detectDocument = (imageCanvas) => {
   if (!window.cv || !window.cv.Mat) return null;
   const cv = window.cv;
 
-  let src = cv.imread(imageCanvas);
+  // Downscale for fast mobile processing
+  const MAX_DIM = 800;
+  const scale = Math.min(1, MAX_DIM / Math.max(imageCanvas.width, imageCanvas.height));
+  
+  const procCanvas = document.createElement('canvas');
+  procCanvas.width = imageCanvas.width * scale;
+  procCanvas.height = imageCanvas.height * scale;
+  const ctx = procCanvas.getContext('2d');
+  ctx.drawImage(imageCanvas, 0, 0, procCanvas.width, procCanvas.height);
+
+  let src = cv.imread(procCanvas);
   let gray = new cv.Mat();
   let blur = new cv.Mat();
   let edges = new cv.Mat();
@@ -68,12 +78,13 @@ export const detectDocument = (imageCanvas) => {
   for (let i = 0; i < contours.size(); ++i) {
     let cnt = contours.get(i);
     let area = cv.contourArea(cnt);
-    if (area > 5000) {
+    if (area > (5000 * scale * scale)) {
       let peri = cv.arcLength(cnt, true);
       let approx = new cv.Mat();
       cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
       
       if (approx.rows === 4 && area > maxArea) {
+        if (docContour) docContour.delete();
         docContour = approx;
         maxArea = area;
       } else {
@@ -85,12 +96,12 @@ export const detectDocument = (imageCanvas) => {
 
   let corners = null;
   if (docContour) {
-    // Extract the 4 points
+    // Extract the 4 points and map back to original scale
     corners = [];
     for (let i = 0; i < 4; i++) {
       corners.push({
-        x: docContour.data32S[i * 2],
-        y: docContour.data32S[i * 2 + 1]
+        x: docContour.data32S[i * 2] / scale,
+        y: docContour.data32S[i * 2 + 1] / scale
       });
     }
     
