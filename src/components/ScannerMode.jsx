@@ -1,3 +1,4 @@
+import "./scanner.css";
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Camera, X, Check, Image as ImageIcon, FileText, ChevronDown, Plus } from 'lucide-react';
 import { loadOpenCV, detectDocument, applyPerspectiveTransform, applyFilter, generatePDF } from '../services/scannerUtils';
