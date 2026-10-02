@@ -8,7 +8,6 @@ import { UploadModal }      from './components/UploadModal';
 import { NewFolderModal }   from './components/NewFolderModal';
 import { SettingsModal }    from './components/SettingsModal';
 import { SharePage }        from './components/SharePage';
-import ScannerMode          from './components/ScannerMode';
 import { StorageService }   from './services/api';
 
 /*
@@ -32,7 +31,6 @@ export default function App() {
   const [showUpload,   setShowUpload]  = useState(false);
   const [showNewFolder,setShowNewFolder] = useState(false);
   const [showSettings, setShowSettings]= useState(false);
-  const [showScanner, setShowScanner] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen]= useState(false);
   const [driveStats, setDriveStats]     = useState([]);
 
@@ -182,7 +180,7 @@ export default function App() {
           onMenuToggle={() => setIsSidebarOpen(!isSidebarOpen)}
           onUpload={() => setShowUpload(true)}
           onNewFolder={() => setShowNewFolder(true)}
-          onScan={() => setShowScanner(true)}
+          onScan={() => alert("Scanner web app coming soon! It will open in a new tab.")}
           onSettings={() => setShowSettings(true)}
           onLogout={handleLogout}
         />
@@ -221,10 +219,6 @@ export default function App() {
           onSave={() => { loadDrives(); loadFiles(); }}
           drives={drives}
         />
-      )}
-
-      {showScanner && (
-        <ScannerMode onClose={() => setShowScanner(false)} />
       )}
     </div>
   );
