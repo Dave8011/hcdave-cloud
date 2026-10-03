@@ -71,6 +71,11 @@ const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://drive.hcdavecloud.in';
+const SCANNER_JWT_SECRET = process.env.SCANNER_JWT_SECRET;
+if (!SCANNER_JWT_SECRET) {
+  console.error("FATAL: SCANNER_JWT_SECRET environment variable is missing.");
+  process.exit(1);
+}
 
 let scannerUpdateState = { status: 'idle', logs: '', error: null };
 
@@ -107,7 +112,7 @@ function recordFailure(ip, entry) {
    ───────────────────────────────────────────── */
 
 app.use(cors({
-  origin: [ALLOWED_ORIGIN, 'https://drive.hcdavecloud.in', 'http://localhost:3000', 'http://localhost:3002', 'http://localhost:5173'],
+  origin: [ALLOWED_ORIGIN, 'https://drive.hcdavecloud.in', 'http://localhost:3000', 'http://localhost:3002', 'http://localhost:5173', 'https://scanner.hcdavecloud.in'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'Range'],
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type'],
@@ -1448,6 +1453,184 @@ function getMime(filePath) {
   };
   return map[ext] || 'application/octet-stream';
 }
+
+/* ─────────────────────────────────────────────
+   HC SCANNER API
+   ───────────────────────────────────────────── */
+// 1. Scanner JWT implementation
+function signScannerJwt(payload, secret, expiresInSeconds) {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const b64Header = Buffer.from(JSON.stringify(header)).toString('base64url');
+  const payloadWithExp = { ...payload, exp: Math.floor(Date.now() / 1000) + expiresInSeconds };
+  const b64Payload = Buffer.from(JSON.stringify(payloadWithExp)).toString('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(`${b64Header}.${b64Payload}`).digest('base64url');
+  return `${b64Header}.${b64Payload}.${signature}`;
+}
+
+function verifyScannerJwt(token, secret) {
+  const [b64Header, b64Payload, signature] = token.split('.');
+  if (!b64Header || !b64Payload || !signature) throw new Error('Invalid token');
+  const expectedSig = crypto.createHmac('sha256', secret).update(`${b64Header}.${b64Payload}`).digest('base64url');
+  if (signature !== expectedSig) throw new Error('Invalid signature');
+  const payload = JSON.parse(Buffer.from(b64Payload, 'base64url').toString());
+  if (payload.exp && Date.now() / 1000 > payload.exp) throw new Error('Token expired');
+  return payload;
+}
+
+// 2. Scanner token endpoint
+app.get('/api/scanner/token', rateLimitAuth, auth, (req, res) => {
+  try {
+    const token = signScannerJwt({ sub: 'admin', aud: 'hc-scanner' }, SCANNER_JWT_SECRET, 900);
+    res.json({ success: true, token });
+  } catch (e) {
+    console.error('Scanner token error:', e);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+// 3. Scanner authentication middleware
+function authScanner(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+  const token = header.slice(7);
+  try {
+    const payload = verifyScannerJwt(token, SCANNER_JWT_SECRET);
+    if (payload.aud !== 'hc-scanner') {
+      return res.status(403).json({ error: 'FORBIDDEN' });
+    }
+    req._scannerAuth = payload;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
+}
+
+// 4. Drives API
+app.get('/api/hc/drives', authScanner, (req, res) => {
+  try {
+    const drives = getMountedDrives().map(d => ({
+      id: d.id,
+      name: d.name
+    }));
+    res.json({ drives });
+  } catch (e) {
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+// 5. Folder API
+app.get('/api/hc/drives/:driveId/folders', authScanner, async (req, res) => {
+  try {
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === req.params.driveId);
+    if (!drive) return res.status(404).json({ error: 'NOT_FOUND' });
+    
+    const rootPath = safePath(drive.mount, '/');
+    if (!fs.existsSync(rootPath)) return res.json({ folders: [] });
+    
+    const dirents = await fs.promises.readdir(rootPath, { withFileTypes: true });
+    const folders = dirents
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => {
+        const name = dirent.name;
+        if (['.fseventsd', '.Spotlight-V100', '.Trashes', 'System Volume Information', '$RECYCLE.BIN', '.hcdave-chunks'].includes(name)) return null;
+        return { id: name, name: name };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.name.localeCompare(b.name));
+      
+    res.json({ folders });
+  } catch (e) {
+    console.error('Scanner Folder API error:', e);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+// 7. Upload API
+const scannerUploadStorage = {
+  _handleFile(req, file, cb) {
+    try {
+      const drives = getMountedDrives();
+      const drive = drives.find(d => d.id === req.body.driveId);
+      if (!drive) return cb(new Error('NOT_FOUND_DRIVE'));
+      
+      const folderId = req.body.folderId || '';
+      if (folderId.includes('/') || folderId.includes('\\\\') || folderId.includes('..')) {
+        return cb(new Error('INVALID_FOLDER'));
+      }
+      
+      let filename = req.body.filename || file.originalname || 'Scanned_Document.pdf';
+      filename = path.basename(filename);
+      if (!filename || filename.includes('\0')) {
+        return cb(new Error('INVALID_FILENAME'));
+      }
+      
+      const destPath = safePath(drive.mount, folderId);
+      if (!fs.existsSync(destPath)) {
+         fs.mkdirSync(destPath, { recursive: true });
+      }
+      
+      const finalPath = path.join(destPath, filename);
+      
+      // Use 'wx' flag to atomically ensure the file does not exist.
+      // This prevents TOCTOU (Time-of-check to time-of-use) overwrites.
+      const outStream = fs.createWriteStream(finalPath, { flags: 'wx' });
+      
+      outStream.on('error', (err) => {
+        if (err.code === 'EEXIST') {
+          return cb(new Error('FILE_EXISTS'));
+        }
+        cb(err);
+      });
+      
+      outStream.on('finish', () => {
+        cb(null, {
+          destination: destPath,
+          filename: filename,
+          path: finalPath,
+          size: outStream.bytesWritten
+        });
+      });
+      
+      file.stream.pipe(outStream);
+    } catch (e) {
+      cb(e);
+    }
+  },
+  _removeFile(req, file, cb) {
+    if (file && file.path) {
+      fs.unlink(file.path, cb);
+    } else {
+      cb(null);
+    }
+  }
+};
+
+const scannerUpload = multer({
+  storage: scannerUploadStorage,
+  limits: { fileSize: 5 * 1024 * 1024 * 1024 }
+});
+
+app.post('/api/hc/upload', authScanner, (req, res) => {
+  scannerUpload.single('file')(req, res, function (err) {
+    if (err) {
+       if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'FILE_TOO_LARGE' });
+       if (err.message === 'FILE_EXISTS') return res.status(409).json({ error: 'FILE_EXISTS' });
+       if (err.message === 'NOT_FOUND_DRIVE') return res.status(404).json({ error: 'NOT_FOUND' });
+       if (err.message === 'INVALID_FOLDER' || err.message === 'INVALID_FILENAME') return res.status(400).json({ error: 'INVALID_PATH' });
+       console.error('Scanner upload error:', err);
+       return res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+    
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'INTERNAL_ERROR' });
+    
+    console.log(`[Scanner] Uploaded ${file.filename} to drive ${req.body.driveId}, folder ${req.body.folderId || '/'}`);
+    res.json({ success: true, name: file.filename });
+  });
+});
 
 /* ─────────────────────────────────────────────
    START
