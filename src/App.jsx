@@ -9,6 +9,7 @@ import { NewFolderModal }   from './components/NewFolderModal';
 import { SettingsModal }    from './components/SettingsModal';
 import { SharePage }        from './components/SharePage';
 import { StorageService }   from './services/api';
+import { ErrorBoundary }    from './components/ErrorBoundary';
 
 /*
   App State Machine:
@@ -214,11 +215,13 @@ export default function App() {
       )}
 
       {showSettings && (
-        <SettingsModal
-          onClose={() => setShowSettings(false)}
-          onSave={() => { loadDrives(); loadFiles(); }}
-          drives={drives}
-        />
+        <ErrorBoundary>
+          <SettingsModal
+            onClose={() => setShowSettings(false)}
+            onSave={() => { loadDrives(); loadFiles(); }}
+            drives={drives}
+          />
+        </ErrorBoundary>
       )}
     </div>
   );
