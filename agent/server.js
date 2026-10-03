@@ -1144,14 +1144,23 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
     return res.status(400).json({ error: 'Update already in progress' });
   }
 
-  scannerUpdateState = { status: 'pulling', logs: '', error: null };
-  res.json({ success: true, message: 'Scanner update started' });
+  try {
+    const pullOutput = execSync('git pull --ff-only', { cwd: repoDir, encoding: 'utf8' }).trim();
+    
+    if (pullOutput.includes('Already up to date')) {
+      return res.json({ success: true, message: 'Scanner is already up to date.', pullOutput });
+    }
 
-  // Run asynchronously
-  (async () => {
-    try {
-      // 1. Pull
-      scannerUpdateState.logs += execSync('git pull --ff-only', { cwd: repoDir, encoding: 'utf8' });
+    scannerUpdateState = { status: 'installing', logs: '', error: null };
+    res.json({ 
+      success: true, 
+      message: `Scanner updated successfully. Building WASM in background...\n${pullOutput}`,
+      pullOutput 
+    });
+
+    // Run asynchronously
+    (async () => {
+      try {
       
       // 2. Install
       scannerUpdateState.status = 'installing';
@@ -1176,6 +1185,10 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
       console.error('Scanner update failed:', e);
     }
   })();
+  } catch (e) {
+    const pullError = e.stderr?.toString() || e.message;
+    return res.status(500).json({ error: 'Git pull failed', detail: pullError });
+  }
 });
 
 app.get('/api/scanner/update-status', rateLimitAuth, auth, (req, res) => {

@@ -83,23 +83,34 @@ export function SettingsModal({ onClose, onSave, drives }) {
       setScannerUpdateMsg('Starting update...');
       const res = await StorageService.updateScanner();
       setScannerUpdateMsg(res.message || 'Update started...');
+      
+      if (res.message && res.message.includes('already up to date')) {
+        setIsUpdatingScanner(false);
+        return;
+      }
 
       const poll = setInterval(async () => {
         try {
           const state = await StorageService.getScannerUpdateStatus();
           
-          if (state.status === 'pulling') setScannerUpdateMsg('Updating source (git pull)...');
-          else if (state.status === 'installing') setScannerUpdateMsg('Installing dependencies (npm install)...');
-          else if (state.status === 'building') setScannerUpdateMsg('Building scanner (takes ~3 mins)...');
-          else if (state.status === 'restarting') setScannerUpdateMsg('Restarting service...');
+          let statusText = '';
+          if (state.status === 'installing') statusText = 'Installing dependencies (npm install)...';
+          else if (state.status === 'building') statusText = 'Building scanner (takes ~3 mins)...';
+          else if (state.status === 'restarting') statusText = 'Restarting service...';
           else if (state.status === 'success') {
             clearInterval(poll);
-            setScannerUpdateMsg('✅ Scanner updated successfully!');
+            setScannerUpdateMsg(`✅ Scanner updated successfully!\n\n${res.pullOutput || ''}`);
             setIsUpdatingScanner(false);
+            return;
           } else if (state.status === 'error') {
             clearInterval(poll);
-            setScannerUpdateMsg('❌ ' + (state.error || 'Update failed'));
+            setScannerUpdateMsg(`❌ Update failed\n\n${state.error || ''}`);
             setIsUpdatingScanner(false);
+            return;
+          }
+          
+          if (statusText) {
+            setScannerUpdateMsg(`${res.message}\n\n⏳ ${statusText}`);
           }
         } catch (_) {}
       }, 2000);
