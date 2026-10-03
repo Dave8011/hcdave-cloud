@@ -1185,23 +1185,53 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
     // Run asynchronously
     (async () => {
       try {
-      
+
       // 2. Install
       scannerUpdateState.status = 'installing';
       scannerUpdateState.logs += execSync('npm install', { cwd: `${repoDir}/apps/web`, encoding: 'utf8' });
-      
+
       // 3. Build WASM
       scannerUpdateState.status = 'building';
       scannerUpdateState.logs += execSync('npm run build', { cwd: `${repoDir}/apps/web`, encoding: 'utf8' });
-      
+
       // 4. Restart
       scannerUpdateState.status = 'restarting';
       execSync('systemctl restart hc-scanner', { encoding: 'utf8' });
-      
+
       // 5. Verify
       const statusOutput = execSync('systemctl is-active hc-scanner', { encoding: 'utf8' }).trim();
       if (statusOutput !== 'active') throw new Error('Service is not active after restart');
-      
+
+      // 6. Purge Cloudflare cache so updated WASM/JS is served immediately without manual purge
+      const CF_ZONE_ID   = process.env.CF_ZONE_ID;
+      const CF_API_TOKEN = process.env.CF_API_TOKEN;
+      if (CF_ZONE_ID && CF_API_TOKEN) {
+        try {
+          const cfRes = await fetch(
+            `https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${CF_API_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ purge_everything: true }),
+            }
+          );
+          const cfData = await cfRes.json();
+          if (cfData.success) {
+            console.log('☁️ Cloudflare cache purged successfully');
+            scannerUpdateState.logs += '\n☁️ Cloudflare cache purged.';
+          } else {
+            console.warn('⚠️ Cloudflare purge failed:', JSON.stringify(cfData.errors));
+          }
+        } catch (cfErr) {
+          console.warn('⚠️ Cloudflare purge request failed:', cfErr.message);
+        }
+      } else {
+        console.log('ℹ️ CF_ZONE_ID / CF_API_TOKEN not set — skipping Cloudflare cache purge');
+      }
+
       scannerUpdateState.status = 'success';
     } catch (e) {
       scannerUpdateState.status = 'error';
