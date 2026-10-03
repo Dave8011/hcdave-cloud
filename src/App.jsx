@@ -94,6 +94,45 @@ export default function App() {
     flashTo('app');
   };
 
+  /* ── Scanner Handshake ── */
+  const handleScanOpen = () => {
+    const targetOrigin = 'https://scanner.hcdavecloud.in';
+    const scannerWindow = window.open(targetOrigin, '_blank');
+    
+    if (!scannerWindow || scannerWindow.closed || typeof scannerWindow.closed === 'undefined') {
+      alert('Popup blocked. Please allow popups for this site.');
+      return;
+    }
+
+    const messageListener = async (event) => {
+      if (event.origin !== targetOrigin) return;
+      if (event.data && event.data.type === 'SCANNER_READY') {
+        try {
+          const data = await StorageService.getScannerToken();
+          if (data && data.token) {
+            scannerWindow.postMessage({ type: 'AUTH_TOKEN', token: data.token }, targetOrigin);
+          } else {
+            throw new Error('No token returned');
+          }
+        } catch (err) {
+          alert('Failed to authorize scanner. ' + err.message);
+          scannerWindow.close();
+        }
+        window.removeEventListener('message', messageListener);
+        clearInterval(checkClosed);
+      }
+    };
+    
+    window.addEventListener('message', messageListener);
+
+    const checkClosed = setInterval(() => {
+      if (scannerWindow.closed) {
+        clearInterval(checkClosed);
+        window.removeEventListener('message', messageListener);
+      }
+    }, 1000);
+  };
+
   /* ── Full intro → next screen ── */
   if (screen === 'intro') {
     return (
@@ -181,7 +220,7 @@ export default function App() {
           onMenuToggle={() => setIsSidebarOpen(!isSidebarOpen)}
           onUpload={() => setShowUpload(true)}
           onNewFolder={() => setShowNewFolder(true)}
-          onScan={() => window.open("https://scanner.hcdavecloud.in", "_blank")}
+          onScan={handleScanOpen}
           onSettings={() => setShowSettings(true)}
           onLogout={handleLogout}
         />

@@ -42,6 +42,15 @@ export class StorageService {
     }
   }
 
+  // GET /api/scanner/token — Get short-lived token for HC Scanner
+  static async getScannerToken() {
+    const r = await fetch(`${this.getAgentUrl()}/api/scanner/token`, {
+      headers: this.headers()
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  }
+
   // GET /api/drives — list all detected plug & play drives
   static async getDrives() {
     try {
