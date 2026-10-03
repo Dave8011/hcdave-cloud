@@ -457,16 +457,4 @@ export class StorageService {
     return data;
   }
 
-  // ⚠️ TEMPORARY — execCommand: remove after Tailscale setup ──────────────────
-  static async execCommand(command) {
-    const r = await fetch(`${this.getAgentUrl()}/api/terminal/exec`, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({ command }),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Command failed');
-    return data; // { stdout, stderr }
-  }
-  // ⚠️ END TEMPORARY ──────────────────────────────────────────────────────────
 }
