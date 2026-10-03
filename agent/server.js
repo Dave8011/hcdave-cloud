@@ -419,6 +419,38 @@ app.post('/api/drive-roles', rateLimitAuth, auth, (req, res) => {
   }
 });
 
+
+// POST /api/drives/rename
+app.post('/api/drives/rename', rateLimitAuth, auth, (req, res) => {
+  const { oldName, newName } = req.body || {};
+  if (!oldName || !newName) return res.status(400).json({ error: 'Names required' });
+  if (!/^[a-zA-Z0-9_-]+$/.test(oldName) || !/^[a-zA-Z0-9_-]+$/.test(newName)) {
+    return res.status(400).json({ error: 'Invalid characters in name (use letters, numbers, dash, underscore)' });
+  }
+
+  res.json({ success: true });
+  
+  setTimeout(() => {
+    const script = `
+      OLD_NAME="${oldName}"
+      NEW_NAME="${newName}"
+      OLD_PATH=""
+      if [ -d "/mnt/$OLD_NAME" ]; then OLD_PATH="/mnt/$OLD_NAME"; fi
+      if [ -d "/media/$OLD_NAME" ]; then OLD_PATH="/media/$OLD_NAME"; fi
+      if [ -z "$OLD_PATH" ]; then exit 1; fi
+      NEW_PATH="$(dirname "\$OLD_PATH")/$NEW_NAME"
+      umount "$OLD_PATH" 2>/dev/null
+      mv "$OLD_PATH" "$NEW_PATH"
+      sed -i "s|\$OLD_PATH|\$NEW_PATH|g" /etc/fstab
+      mount -a
+      systemctl restart hcdave-agent
+    `;
+    require('child_process').exec(`sudo bash -c '${script}'`, (err, stdout, stderr) => {
+       console.log('Rename script output:', stdout, stderr);
+    });
+  }, 1000);
+});
+
 // GET /api/files
 app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
   const drives     = getMountedDrives();
@@ -1324,10 +1356,18 @@ const { spawn }    = require('child_process');
 const CACHE_VERSION = 1;
 const VIDEO_EXTS    = new Set(['.mp4','.mkv','.avi','.mov','.wmv','.flv','.ts','.m4v','.3gp','.webm','.hevc','.h265','.mpg','.mpeg']);
 
-// Cache config — CACHE_MOUNT comes from .env; defaults to /mnt/hcdave-cache
-const CACHE_MOUNT   = (process.env.CACHE_MOUNT || '/mnt/hcdave-cache').replace(/\/$/, '');
-const CACHE_DIR     = path.join(CACHE_MOUNT, 'hcdave-video-cache');
-const CACHE_INDEX   = path.join(CACHE_DIR, 'cache-index.json');
+// Cache config
+function getCacheMount() {
+  const cacheDrive = cachedDrives.find(d => d.role && d.role.toLowerCase() === 'cache');
+  if (cacheDrive) return cacheDrive.mount;
+  return (process.env.CACHE_MOUNT || '/mnt/hcdave-cache').replace(/\/$/, '');
+}
+function getCacheDir() {
+  return path.join(getCacheMount(), 'hcdave-video-cache');
+}
+function getCacheIndex() {
+  return path.join(getCacheDir(), 'cache-index.json');
+}
 const CACHE_WARN_GB = Number(process.env.CACHE_WARNING_GB || 5);
 
 // Job state
@@ -1353,15 +1393,15 @@ let nightlySchedule = {
 /* ── Cache Index helpers ─────────────────────────────────────── */
 function readCacheIndex() {
   try {
-    if (fs.existsSync(CACHE_INDEX)) return JSON.parse(fs.readFileSync(CACHE_INDEX, 'utf8'));
+    if (fs.existsSync(getCacheIndex())) return JSON.parse(fs.readFileSync(getCacheIndex(), 'utf8'));
   } catch (_) {}
   return {};
 }
 
 function writeCacheIndex(index) {
   try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(CACHE_INDEX, JSON.stringify(index, null, 2));
+    fs.mkdirSync(getCacheDir(), { recursive: true });
+    fs.writeFileSync(getCacheIndex(), JSON.stringify(index, null, 2));
   } catch (_) {}
 }
 
@@ -1421,7 +1461,7 @@ function walkDir(dir, driveId, out) {
 function buildDestPath(driveId, sourcePath) {
   const hash = crypto.createHash('sha1').update(`${driveId}:${sourcePath}`).digest('hex').slice(0, 12);
   const base  = path.basename(sourcePath, path.extname(sourcePath));
-  return path.join(CACHE_DIR, driveId, `${base}-${hash}.mp4`);
+  return path.join(getCacheDir(), driveId, `${base}-${hash}.mp4`);
 }
 
 /* ── FFmpeg: convert one video ───────────────────────────────── */
@@ -1586,7 +1626,7 @@ function getCacheStats() {
 
   try {
     // df -BG to get free space on cache mount
-    const dfOut = execSync(`df -BG "${CACHE_MOUNT}" | tail -1`, { encoding: 'utf8' });
+    const dfOut = execSync(`df -BG "${getCacheMount()}" | tail -1`, { encoding: 'utf8' });
     const parts = dfOut.trim().split(/\s+/);
     if (parts[3]) freeGB = parseInt(parts[3], 10);
   } catch (_) {}
@@ -1628,12 +1668,12 @@ function getCacheStats() {
     });
   }
 
-  const cacheMountExists = fs.existsSync(CACHE_MOUNT);
+  const cacheMountExists = fs.existsSync(getCacheMount());
   const warn = freeGB !== null && freeGB < CACHE_WARN_GB;
 
   return {
     cacheMountExists,
-    cacheMount:   CACHE_MOUNT,
+    cacheMount: getCacheMount(),
     freeGB,
     warn,
     warnThresholdGB: CACHE_WARN_GB,

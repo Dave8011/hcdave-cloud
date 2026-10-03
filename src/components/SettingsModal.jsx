@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database, HardDrive } from 'lucide-react';
+import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database, HardDrive, Edit2, AlertTriangle } from 'lucide-react';
 import { StorageService } from '../services/api';
 import { CachePanel } from './CachePanel';
 
@@ -16,6 +16,11 @@ export function SettingsModal({ onClose, onSave, drives }) {
   const [stats, setStats]           = useState(null);
   const [cacheWarn, setCacheWarn]   = useState(false);
   const [driveRoles, setDriveRoles] = useState({});
+  const [renamingDriveId, setRenamingDriveId] = useState(null);
+  const [newName, setNewName]       = useState('');
+  const [renameTarget, setRenameTarget] = useState(null);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameMsg, setRenameMsg]   = useState('');
 
   useEffect(() => {
     StorageService.getHealth().then(data => {
@@ -64,6 +69,20 @@ export function SettingsModal({ onClose, onSave, drives }) {
     } catch (e) {
       setUpdateMsg('❌ ' + (e.message || 'Update failed'));
       setIsUpdating(false);
+    }
+  };
+
+  const executeRename = async () => {
+    if (!renameTarget) return;
+    setIsRenaming(true);
+    setRenameMsg('Renaming drive and restarting server...');
+    const res = await StorageService.renameDrive(renameTarget.oldName, renameTarget.newName);
+    if (res.error) {
+      setRenameMsg('❌ ' + res.error);
+      setIsRenaming(false);
+    } else {
+      setRenameMsg('✅ Rename successful! Reloading page...');
+      setTimeout(() => window.location.reload(), 5000);
     }
   };
 
@@ -223,12 +242,36 @@ export function SettingsModal({ onClose, onSave, drives }) {
                   const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5, '': 6 };
                   return (roleOrder[roleA] || 99) - (roleOrder[roleB] || 99);
                 }).map(d => (
-                  <div key={d.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                    <div>
-                      <div style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--text-1)' }}>{d.name}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'monospace' }}>{d.uuid || d.id} • {d.type} • {d.totalGB} GB</div>
-                    </div>
-                    <select
+                    <div key={d.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div>
+                          {renamingDriveId === d.id ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                              <input
+                                type="text"
+                                value={newName}
+                                onChange={e => setNewName(e.target.value)}
+                                placeholder="New name..."
+                                style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-1)', color: 'white', outline: 'none', fontSize: '0.85rem' }}
+                              />
+                              <button className="btn btn-primary" style={{ padding: '4px 8px' }} onClick={() => {
+                                if (!newName || newName === d.name) { setRenamingDriveId(null); return; }
+                                setRenameTarget({ oldName: d.name, newName });
+                                setShowRenameConfirm(true);
+                              }}>Save</button>
+                              <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={() => setRenamingDriveId(null)}>Cancel</button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <div style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--text-1)' }}>{d.name}</div>
+                              <button className="btn btn-ghost" style={{ padding: '4px', opacity: 0.6 }} onClick={() => { setRenamingDriveId(d.id); setNewName(d.name); }} title="Rename physical drive">
+                                <Edit2 size={14} />
+                              </button>
+                            </div>
+                          )}
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', fontFamily: 'monospace', marginTop: 2 }}>{d.uuid || d.id} • {d.totalGB} GB</div>
+                        </div>
+                        <select
                       value={driveRoles[d.uuid || d.id] || ''}
                       onChange={e => setDriveRoles({ ...driveRoles, [d.uuid || d.id]: e.target.value })}
                       style={{
@@ -244,10 +287,12 @@ export function SettingsModal({ onClose, onSave, drives }) {
                       <option value="" style={{ background: '#1e1e1e', color: '#fff' }}>None</option>
                       <option value="Master" style={{ background: '#1e1e1e', color: '#fff' }}>Master</option>
                       <option value="Gallery" style={{ background: '#1e1e1e', color: '#fff' }}>Gallery</option>
-                      <option value="Portable" style={{ background: '#1e1e1e', color: '#fff' }}>Portable</option>
-                      <option value="Backup" style={{ background: '#1e1e1e', color: '#fff' }}>Backup</option>
-                      <option value="Cache" style={{ background: '#1e1e1e', color: '#fff' }}>Cache</option>
-                    </select>
+                        <option value="Portable" style={{ background: '#1e1e1e', color: '#fff' }}>Portable</option>
+                        <option value="Backup" style={{ background: '#1e1e1e', color: '#fff' }}>Backup</option>
+                        <option value="Cache" style={{ background: '#1e1e1e', color: '#fff' }}>Cache</option>
+                        <option value="Storage" style={{ background: '#1e1e1e', color: '#fff' }}>Storage</option>
+                      </select>
+                    </div>
                   </div>
                 ))
               )}
@@ -262,6 +307,35 @@ export function SettingsModal({ onClose, onSave, drives }) {
           </div>
         )}
       </div>
+
+      {showRenameConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: 'var(--bg-card)', padding: '24px', borderRadius: '12px', maxWidth: '400px', width: '90%', border: '1px solid var(--border)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--amber)', marginBottom: 16 }}>
+              <AlertTriangle size={24} />
+              <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>Restart Required</div>
+            </div>
+            <div style={{ fontSize: '0.9rem', color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 20 }}>
+              Renaming <strong style={{ color: 'var(--text-1)' }}>{renameTarget?.oldName}</strong> to <strong style={{ color: 'var(--cyan)' }}>{renameTarget?.newName}</strong> requires rebooting the storage service.<br/><br/>
+              <span style={{ color: 'var(--rose)' }}>Any active file transfers or video conversions will be abruptly stopped.</span> Are you sure you want to proceed?
+            </div>
+            
+            {renameMsg && (
+              <div style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', marginBottom: 16, fontSize: '0.85rem', color: renameMsg.includes('❌') ? 'var(--rose)' : 'var(--emerald)' }}>
+                {renameMsg}
+              </div>
+            )}
+            
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button className="btn btn-ghost" onClick={() => { setShowRenameConfirm(false); setRenameTarget(null); setRenameMsg(''); }} disabled={isRenaming}>Cancel</button>
+              <button className="btn btn-primary" style={{ background: 'var(--rose)' }} onClick={executeRename} disabled={isRenaming}>
+                {isRenaming ? <RefreshCw size={16} className="spin" /> : <Edit2 size={16} />}
+                <span>{isRenaming ? 'Renaming...' : 'Rename & Restart'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

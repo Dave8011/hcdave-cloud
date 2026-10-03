@@ -90,6 +90,20 @@ export class StorageService {
     }
   }
 
+  static async renameDrive(oldName, newName) {
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/api/drives/rename`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ oldName, newName })
+      });
+      if (r.ok) return await r.json();
+      return { error: 'Failed' };
+    } catch (e) {
+      return { error: e.message };
+    }
+  }
+
   // GET /api/files — list files in a drive path
   static async listFiles(driveId, path = '/') {
     if (!driveId) return [];

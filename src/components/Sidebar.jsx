@@ -33,12 +33,14 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
             </div>
           ) : (
             [...drives].sort((a, b) => {
-              const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5 };
+              const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5, 'Storage': 6 };
               return (roleOrder[a.role] || 99) - (roleOrder[b.role] || 99);
             }).map((drive, i) => {
               const pct = Math.min(100, Math.round((drive.usedGB / drive.totalGB) * 100));
               const isActive = drive.id === activeDriveId;
-              const isSSD = drive.type === 'SSD';
+              
+              const roleColors = { Master: 'var(--rose)', Gallery: 'var(--amber)', Portable: 'var(--cyan)', Backup: 'var(--emerald)', Cache: 'var(--indigo)', Storage: 'var(--violet)' };
+              const badgeColor = roleColors[drive.role] || 'var(--indigo)';
 
               return (
                 <div
@@ -50,16 +52,13 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
                   <div className="drive-header">
                     <div className="drive-info">
                       <span className="drive-icon-wrap">
-                        {isSSD
-                          ? <Cpu size={17} />
-                          : <HardDrive size={17} />
-                        }
+                        <HardDrive size={17} />
                       </span>
                       <span className="drive-label">{drive.name}</span>
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
                       {drive.role && (
-                        <span className="drive-tag" style={{ background: 'var(--indigo)', color: 'white', border: 'none' }}>
+                        <span className="drive-tag" style={{ background: badgeColor, color: 'white', border: 'none' }}>
                           {drive.role}
                         </span>
                       )}
@@ -71,9 +70,7 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
                       className="prog-fill"
                       style={{
                         width: `${pct}%`,
-                        background: isSSD
-                          ? 'linear-gradient(90deg, var(--cyan), var(--emerald))'
-                          : 'linear-gradient(90deg, var(--indigo), var(--violet))'
+                        background: 'linear-gradient(90deg, var(--indigo), var(--violet))'
                       }}
                     />
                   </div>
