@@ -1203,7 +1203,7 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
       if (statusOutput !== 'active') throw new Error('Service is not active after restart');
 
       // 6. Purge Cloudflare cache so updated WASM/JS is served immediately without manual purge
-      const CF_ZONE_ID   = process.env.CF_ZONE_ID;
+      const CF_ZONE_ID   = '1b4060f027d39bf0e6ed631a1905bd57';
       const CF_API_TOKEN = process.env.CF_API_TOKEN;
       if (CF_ZONE_ID && CF_API_TOKEN) {
         try {
