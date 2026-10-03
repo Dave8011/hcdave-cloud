@@ -310,27 +310,55 @@ export function SettingsModal({ onClose, onSave, drives }) {
       </div>
 
       {showRenameConfirm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ background: 'var(--bg-card)', padding: '24px', borderRadius: '12px', maxWidth: '400px', width: '90%', border: '1px solid var(--border)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--amber)', marginBottom: 16 }}>
-              <AlertTriangle size={24} />
-              <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>Restart Required</div>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(4px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ 
+            background: '#1e1e2e', 
+            padding: '32px', 
+            borderRadius: '16px', 
+            maxWidth: '420px', 
+            width: '90%', 
+            border: '1px solid rgba(255, 255, 255, 0.1)', 
+            boxShadow: '0 20px 40px rgba(0,0,0,0.6)' 
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, color: '#f59e0b', marginBottom: 20 }}>
+              <div style={{ background: 'rgba(245, 158, 11, 0.15)', padding: '10px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <AlertTriangle size={28} />
+              </div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#ffffff' }}>Restart Required</div>
             </div>
-            <div style={{ fontSize: '0.95rem', color: 'var(--text-1)', lineHeight: 1.6, marginBottom: 20 }}>
-              Renaming <strong style={{ color: 'var(--text-1)' }}>{renameTarget?.oldName}</strong> to <strong style={{ color: 'var(--cyan)' }}>{renameTarget?.newName}</strong> requires rebooting the storage service.<br/><br/>
-              <span style={{ color: 'var(--rose)' }}>Any active file transfers or video conversions will be abruptly stopped.</span> Are you sure you want to proceed?
+            
+            <div style={{ fontSize: '0.95rem', color: '#e2e8f0', lineHeight: 1.6, marginBottom: 24 }}>
+              Renaming <strong style={{ color: '#ffffff', background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: 4 }}>{renameTarget?.oldName}</strong> to <strong style={{ color: '#22d3ee', background: 'rgba(34, 211, 238, 0.1)', padding: '2px 6px', borderRadius: 4 }}>{renameTarget?.newName}</strong> requires rebooting the storage service.
+              
+              <div style={{ marginTop: 16, padding: '12px 16px', background: 'rgba(244, 63, 94, 0.1)', borderLeft: '4px solid #f43f5e', borderRadius: '4px', color: '#fda4af', fontSize: '0.85rem', lineHeight: 1.5 }}>
+                <strong style={{ color: '#f43f5e' }}>Warning:</strong> Any active file transfers or video conversions will be abruptly stopped.
+              </div>
             </div>
             
             {renameMsg && (
-              <div style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', marginBottom: 16, fontSize: '0.85rem', color: renameMsg.includes('❌') ? 'var(--rose)' : 'var(--emerald)' }}>
+              <div style={{ padding: '12px 16px', background: renameMsg.includes('❌') ? 'rgba(244, 63, 94, 0.1)' : 'rgba(16, 185, 129, 0.1)', border: '1px solid', borderColor: renameMsg.includes('❌') ? 'rgba(244, 63, 94, 0.3)' : 'rgba(16, 185, 129, 0.3)', borderRadius: '8px', marginBottom: 24, fontSize: '0.9rem', color: renameMsg.includes('❌') ? '#fda4af' : '#6ee7b7' }}>
                 {renameMsg}
               </div>
             )}
             
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <button className="btn btn-ghost" onClick={() => { setShowRenameConfirm(false); setRenameTarget(null); setRenameMsg(''); }} disabled={isRenaming}>Cancel</button>
-              <button className="btn btn-primary" style={{ background: 'var(--rose)' }} onClick={executeRename} disabled={isRenaming}>
-                {isRenaming ? <RefreshCw size={16} className="spin" /> : <Edit2 size={16} />}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 32 }}>
+              <button 
+                onClick={() => { setShowRenameConfirm(false); setRenameTarget(null); setRenameMsg(''); }} 
+                disabled={isRenaming}
+                style={{ padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', background: 'transparent', color: '#ffffff', cursor: isRenaming ? 'not-allowed' : 'pointer', fontWeight: 600, transition: 'all 0.2s' }}
+                onMouseOver={e => e.target.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseOut={e => e.target.style.background = 'transparent'}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={executeRename} 
+                disabled={isRenaming}
+                style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', background: '#f43f5e', color: '#ffffff', cursor: isRenaming ? 'not-allowed' : 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, transition: 'all 0.2s', boxShadow: '0 4px 12px rgba(244, 63, 94, 0.3)' }}
+                onMouseOver={e => !isRenaming && (e.target.style.background = '#e11d48')}
+                onMouseOut={e => !isRenaming && (e.target.style.background = '#f43f5e')}
+              >
+                {isRenaming ? <RefreshCw size={18} className="spin" /> : <Edit2 size={18} />}
                 <span>{isRenaming ? 'Renaming...' : 'Rename & Restart'}</span>
               </button>
             </div>
