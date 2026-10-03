@@ -90,7 +90,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
           const state = await StorageService.getScannerUpdateStatus();
           
           if (state.status === 'pulling') setScannerUpdateMsg('Updating source (git pull)...');
-          else if (state.status === 'installing') setScannerUpdateMsg('Installing dependencies (npm ci)...');
+          else if (state.status === 'installing') setScannerUpdateMsg('Installing dependencies (npm install)...');
           else if (state.status === 'building') setScannerUpdateMsg('Building scanner (takes ~3 mins)...');
           else if (state.status === 'restarting') setScannerUpdateMsg('Restarting service...');
           else if (state.status === 'success') {

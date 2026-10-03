@@ -1155,7 +1155,7 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
       
       // 2. Install
       scannerUpdateState.status = 'installing';
-      scannerUpdateState.logs += execSync('npm ci', { cwd: repoDir, encoding: 'utf8' });
+      scannerUpdateState.logs += execSync('npm install', { cwd: repoDir, encoding: 'utf8' });
       
       // 3. Build WASM
       scannerUpdateState.status = 'building';
