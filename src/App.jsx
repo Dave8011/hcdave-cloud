@@ -44,7 +44,7 @@ export default function App() {
   /* Drive + file loading */
   const loadDrives = useCallback(async () => {
     const rawList = await StorageService.getDrives();
-    const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5 };
+    const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5, 'Storage': 6 };
     const list = rawList.sort((a, b) => (roleOrder[a.role] || 99) - (roleOrder[b.role] || 99));
     setDrives(list);
     if (list.length && !activeDriveId) setActiveDriveId(list[0].id);

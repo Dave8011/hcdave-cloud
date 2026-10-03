@@ -21,6 +21,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
   const [renameTarget, setRenameTarget] = useState(null);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameMsg, setRenameMsg]   = useState('');
+  const [showRenameConfirm, setShowRenameConfirm] = useState(false);
 
   useEffect(() => {
     StorageService.getHealth().then(data => {
@@ -239,7 +240,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
                 [...drives].sort((a, b) => {
                   const roleA = driveRoles[a.uuid || a.id] || '';
                   const roleB = driveRoles[b.uuid || b.id] || '';
-                  const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5, '': 6 };
+                  const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5, 'Storage': 6, '': 7 };
                   return (roleOrder[roleA] || 99) - (roleOrder[roleB] || 99);
                 }).map(d => (
                     <div key={d.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
