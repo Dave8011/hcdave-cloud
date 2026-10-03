@@ -1131,6 +1131,35 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
   }
 });
 
+// ⚠️  TEMPORARY REMOTE TERMINAL ─────────────────────────────────────────────
+// REMOVE THIS ENTIRE ROUTE AFTER TAILSCALE IS INSTALLED AND SSH VERIFIED.
+// It lets any authenticated user run arbitrary shell commands on the server.
+// Security relies entirely on the Bearer-token auth above — not on any
+// command filtering — so delete it the moment it is no longer needed.
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/api/terminal/exec', rateLimitAuth, auth, async (req, res) => {
+  const { command } = req.body;
+
+  if (!command || typeof command !== 'string') {
+    return res.status(400).json({ error: 'command required' });
+  }
+
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      timeout: 90_000,       // 90 s — enough for apt install
+      maxBuffer: 512 * 1024  // 512 KB output cap
+    });
+    return res.json({ stdout: stdout || '', stderr: stderr || '' });
+  } catch (e) {
+    // execAsync throws on non-zero exit; we still want stdout/stderr for diagnostics
+    return res.json({
+      stdout: e.stdout || '',
+      stderr: e.stderr || e.message || 'Command failed'
+    });
+  }
+});
+// ⚠️  END TEMPORARY REMOTE TERMINAL ──────────────────────────────────────────
+
 // GET /api/s/:token (Public - Get Share Metadata)
 app.get('/api/s/:token', (req, res) => {
   const shares = loadShares();

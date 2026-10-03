@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database, HardDrive, Edit2, AlertTriangle } from 'lucide-react';
+import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database, HardDrive, Edit2, AlertTriangle, Monitor } from 'lucide-react';
 import { StorageService } from '../services/api';
 import { CachePanel } from './CachePanel';
+// ⚠️ TEMPORARY — remove this import after Tailscale setup
+import { TerminalPanel } from './TerminalPanel';
 
 export function SettingsModal({ onClose, onSave, drives }) {
   const [tab, setTab]               = useState('connection'); // 'connection' | 'cache' | 'drives'
@@ -91,6 +93,8 @@ export function SettingsModal({ onClose, onSave, drives }) {
     { key: 'connection', label: 'Connection', Icon: Globe },
     { key: 'drives',     label: 'Drives',     Icon: HardDrive },
     { key: 'cache',      label: 'Video Cache', Icon: Database, badge: cacheWarn },
+    // ⚠️ TEMPORARY — remove this tab after Tailscale setup
+    { key: 'terminal',   label: '🖥 Terminal',  Icon: Monitor },
   ];
 
   return (
@@ -224,6 +228,9 @@ export function SettingsModal({ onClose, onSave, drives }) {
 
         {/* Cache Tab */}
         {tab === 'cache' && <CachePanel drives={drives} />}
+
+        {/* ⚠️ Temporary Terminal Tab — remove after Tailscale setup */}
+        {tab === 'terminal' && <TerminalPanel />}
 
         {/* Drives Tab */}
         {tab === 'drives' && (
