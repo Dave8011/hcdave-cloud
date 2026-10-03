@@ -95,10 +95,11 @@ export class StorageService {
       const r = await fetch(`${this.getAgentUrl()}/api/drives/rename`, {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify({ oldName, newName })
+        body: JSON.stringify({ oldMount: oldName, newName })
       });
-      if (r.ok) return await r.json();
-      return { error: 'Failed' };
+      const data = await r.json();
+      if (r.ok) return data;
+      return { error: data.error || 'Failed' };
     } catch (e) {
       return { error: e.message };
     }

@@ -422,22 +422,19 @@ app.post('/api/drive-roles', rateLimitAuth, auth, (req, res) => {
 
 // POST /api/drives/rename
 app.post('/api/drives/rename', rateLimitAuth, auth, (req, res) => {
-  const { oldName, newName } = req.body || {};
-  if (!oldName || !newName) return res.status(400).json({ error: 'Names required' });
-  if (!/^[a-zA-Z0-9_-]+$/.test(oldName) || !/^[a-zA-Z0-9_-]+$/.test(newName)) {
-    return res.status(400).json({ error: 'Invalid characters in name (use letters, numbers, dash, underscore)' });
+  const { oldMount, newName } = req.body || {};
+  if (!oldMount || !newName) return res.status(400).json({ error: 'Parameters required' });
+  if (!/^[a-zA-Z0-9_-]+$/.test(newName)) {
+    return res.status(400).json({ error: 'Invalid characters in new name (use letters, numbers, dash, underscore)' });
   }
 
   res.json({ success: true });
   
   setTimeout(() => {
     const script = `
-      OLD_NAME="${oldName}"
+      OLD_PATH="${oldMount}"
       NEW_NAME="${newName}"
-      OLD_PATH=""
-      if [ -d "/mnt/$OLD_NAME" ]; then OLD_PATH="/mnt/$OLD_NAME"; fi
-      if [ -d "/media/$OLD_NAME" ]; then OLD_PATH="/media/$OLD_NAME"; fi
-      if [ -z "$OLD_PATH" ]; then exit 1; fi
+      if [ ! -d "$OLD_PATH" ]; then exit 1; fi
       NEW_PATH="$(dirname "\$OLD_PATH")/$NEW_NAME"
       umount "$OLD_PATH" 2>/dev/null
       mv "$OLD_PATH" "$NEW_PATH"

@@ -77,7 +77,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
     if (!renameTarget) return;
     setIsRenaming(true);
     setRenameMsg('Renaming drive and restarting server...');
-    const res = await StorageService.renameDrive(renameTarget.oldName, renameTarget.newName);
+    const res = await StorageService.renameDrive(renameTarget.oldMount, renameTarget.newName);
     if (res.error) {
       setRenameMsg('❌ ' + res.error);
       setIsRenaming(false);
@@ -257,7 +257,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
                               />
                               <button className="btn btn-primary" style={{ padding: '4px 8px' }} onClick={() => {
                                 if (!newName || newName === d.name) { setRenamingDriveId(null); return; }
-                                setRenameTarget({ oldName: d.name, newName });
+                                setRenameTarget({ oldName: d.name, oldMount: d.mount, newName });
                                 setShowRenameConfirm(true);
                               }}>Save</button>
                               <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={() => setRenamingDriveId(null)}>Cancel</button>
@@ -316,7 +316,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
               <AlertTriangle size={24} />
               <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>Restart Required</div>
             </div>
-            <div style={{ fontSize: '0.9rem', color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 20 }}>
+            <div style={{ fontSize: '0.95rem', color: 'var(--text-1)', lineHeight: 1.6, marginBottom: 20 }}>
               Renaming <strong style={{ color: 'var(--text-1)' }}>{renameTarget?.oldName}</strong> to <strong style={{ color: 'var(--cyan)' }}>{renameTarget?.newName}</strong> requires rebooting the storage service.<br/><br/>
               <span style={{ color: 'var(--rose)' }}>Any active file transfers or video conversions will be abruptly stopped.</span> Are you sure you want to proceed?
             </div>
