@@ -26,12 +26,16 @@ export function SettingsModal({ onClose, onSave, drives }) {
   
   const [isUpdatingScanner, setIsUpdatingScanner] = useState(false);
   const [scannerUpdateMsg, setScannerUpdateMsg]   = useState('');
+  const [scannerVersion, setScannerVersion] = useState('Checking...');
+  const [scannerLastUpdated, setScannerLastUpdated] = useState('');
 
   useEffect(() => {
     StorageService.getHealth().then(data => {
       setAgentVersion(data.version || 'unknown');
       setLocalIp(data.localIp || 'Unknown');
       setLastUpdated(data.lastUpdated || 'Unknown');
+      if (data.scannerVersion) setScannerVersion(data.scannerVersion);
+      if (data.scannerLastUpdated) setScannerLastUpdated(data.scannerLastUpdated);
       if (data.stats) setStats(data.stats);
     });
     // Check cache warning badge
@@ -100,6 +104,10 @@ export function SettingsModal({ onClose, onSave, drives }) {
           else if (state.status === 'success') {
             clearInterval(poll);
             setScannerUpdateMsg(`✅ Scanner updated successfully!\n\n${res.pullOutput || ''}`);
+            StorageService.getHealth().then(data => {
+              if (data.scannerVersion) setScannerVersion(data.scannerVersion);
+              if (data.scannerLastUpdated) setScannerLastUpdated(data.scannerLastUpdated);
+            });
             setIsUpdatingScanner(false);
             return;
           } else if (state.status === 'error') {
@@ -263,6 +271,12 @@ export function SettingsModal({ onClose, onSave, drives }) {
             <div style={{ padding: '14px', background: 'var(--bg-2)', borderRadius: 'var(--r-sm)', marginBottom: 22 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: '0.85rem', marginBottom: 8 }}>
                 <RefreshCw size={15} color="var(--text-1)" /><span>Scanner Updates</span>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: 4 }}>
+                Version: <strong style={{ color: 'var(--text-1)' }}>{scannerVersion}</strong>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: 12 }}>
+                Last Git Update: <strong style={{ color: 'var(--text-2)' }}>{scannerLastUpdated}</strong>
               </div>
               <div style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: 1.7, marginBottom: 12 }}>
                 Pull the latest code from GitHub, build the WASM, and restart the scanner service.

@@ -369,9 +369,19 @@ app.get('/health', (_, res) => {
   const memUsage = Math.round(((totalMem - freeMem) / totalMem) * 100);
   const uptimeHours = (os.uptime() / 3600).toFixed(1);
   const load = os.loadavg()[0].toFixed(2);
+  
   let lastUpdated = 'Unknown';
   try {
     lastUpdated = execSync('git log -1 --format="%cd - %s" --date=short', { cwd: '/home/root1/hcdave-cloud', encoding: 'utf8' }).trim();
+  } catch (_) {}
+
+  let scannerVersion = 'Unknown';
+  let scannerLastUpdated = 'Unknown';
+  try {
+    const scannerHash = execSync('git rev-parse --short HEAD', { cwd: '/opt/hcdave-scanner', stdio: 'pipe' }).toString().trim();
+    const scannerCount = execSync('git rev-list --count HEAD', { cwd: '/opt/hcdave-scanner', stdio: 'pipe' }).toString().trim();
+    if (scannerHash) scannerVersion = `v1.0.${scannerCount}-${scannerHash}`;
+    scannerLastUpdated = execSync('git log -1 --format="%cd - %s" --date=short', { cwd: '/opt/hcdave-scanner', encoding: 'utf8' }).trim();
   } catch (_) {}
 
   res.json({ 
@@ -379,6 +389,8 @@ app.get('/health', (_, res) => {
     version: VERSION, 
     localIp: getLocalIp(), 
     lastUpdated,
+    scannerVersion,
+    scannerLastUpdated,
     stats: { memUsage, uptimeHours, load },
     time: new Date().toISOString() 
   });
