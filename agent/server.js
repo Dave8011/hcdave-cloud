@@ -72,6 +72,8 @@ const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://drive.hcdavecloud.in';
 
+let scannerUpdateState = { status: 'idle', logs: '', error: null };
+
 /* ─────────────────────────────────────────────
    RATE LIMITER (brute-force protection)
    ───────────────────────────────────────────── */
@@ -1129,6 +1131,55 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
+  const repoDir = '/opt/hcdave-scanner';
+  
+  if (!fs.existsSync(repoDir)) {
+    return res.status(400).json({ error: 'Scanner repository not found at ' + repoDir });
+  }
+
+  if (scannerUpdateState.status !== 'idle' && scannerUpdateState.status !== 'success' && scannerUpdateState.status !== 'error') {
+    return res.status(400).json({ error: 'Update already in progress' });
+  }
+
+  scannerUpdateState = { status: 'pulling', logs: '', error: null };
+  res.json({ success: true, message: 'Scanner update started' });
+
+  // Run asynchronously
+  (async () => {
+    try {
+      // 1. Pull
+      scannerUpdateState.logs += execSync('git pull --ff-only', { cwd: repoDir, encoding: 'utf8' });
+      
+      // 2. Install
+      scannerUpdateState.status = 'installing';
+      scannerUpdateState.logs += execSync('npm ci', { cwd: repoDir, encoding: 'utf8' });
+      
+      // 3. Build WASM
+      scannerUpdateState.status = 'building';
+      scannerUpdateState.logs += execSync('npm run build', { cwd: repoDir, encoding: 'utf8' });
+      
+      // 4. Restart
+      scannerUpdateState.status = 'restarting';
+      execSync('systemctl restart hc-scanner', { encoding: 'utf8' });
+      
+      // 5. Verify
+      const statusOutput = execSync('systemctl is-active hc-scanner', { encoding: 'utf8' }).trim();
+      if (statusOutput !== 'active') throw new Error('Service is not active after restart');
+      
+      scannerUpdateState.status = 'success';
+    } catch (e) {
+      scannerUpdateState.status = 'error';
+      scannerUpdateState.error = e.stderr?.toString() || e.message;
+      console.error('Scanner update failed:', e);
+    }
+  })();
+});
+
+app.get('/api/scanner/update-status', rateLimitAuth, auth, (req, res) => {
+  res.json(scannerUpdateState);
 });
 
 // ⚠️  TEMPORARY REMOTE TERMINAL ─────────────────────────────────────────────

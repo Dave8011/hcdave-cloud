@@ -181,7 +181,7 @@ export default function App() {
           onMenuToggle={() => setIsSidebarOpen(!isSidebarOpen)}
           onUpload={() => setShowUpload(true)}
           onNewFolder={() => setShowNewFolder(true)}
-          onScan={() => alert("Scanner web app coming soon! It will open in a new tab.")}
+          onScan={() => window.open("https://scanner.hcdavecloud.in", "_blank")}
           onSettings={() => setShowSettings(true)}
           onLogout={handleLogout}
         />

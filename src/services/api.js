@@ -290,6 +290,27 @@ export class StorageService {
     return data;
   }
 
+  // POST /api/scanner/update
+  static async updateScanner() {
+    const r = await fetch(`${this.getAgentUrl()}/api/scanner/update`, {
+      method: 'POST',
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to update scanner');
+    return data;
+  }
+
+  // GET /api/scanner/update-status
+  static async getScannerUpdateStatus() {
+    const r = await fetch(`${this.getAgentUrl()}/api/scanner/update-status`, {
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to get scanner status');
+    return data;
+  }
+
   // GET /api/s/:token
   static async getShareMetadata(token) {
     const r = await fetch(`${this.getAgentUrl()}/api/s/${token}`);

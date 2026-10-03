@@ -24,6 +24,9 @@ export function SettingsModal({ onClose, onSave, drives }) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameMsg, setRenameMsg]   = useState('');
   const [showRenameConfirm, setShowRenameConfirm] = useState(false);
+  
+  const [isUpdatingScanner, setIsUpdatingScanner] = useState(false);
+  const [scannerUpdateMsg, setScannerUpdateMsg]   = useState('');
 
   useEffect(() => {
     StorageService.getHealth().then(data => {
@@ -72,6 +75,38 @@ export function SettingsModal({ onClose, onSave, drives }) {
     } catch (e) {
       setUpdateMsg('❌ ' + (e.message || 'Update failed'));
       setIsUpdating(false);
+    }
+  };
+
+  const triggerScannerUpdate = async () => {
+    try {
+      setIsUpdatingScanner(true);
+      setScannerUpdateMsg('Starting update...');
+      const res = await StorageService.updateScanner();
+      setScannerUpdateMsg(res.message || 'Update started...');
+
+      const poll = setInterval(async () => {
+        try {
+          const state = await StorageService.getScannerUpdateStatus();
+          
+          if (state.status === 'pulling') setScannerUpdateMsg('Updating source (git pull)...');
+          else if (state.status === 'installing') setScannerUpdateMsg('Installing dependencies (npm ci)...');
+          else if (state.status === 'building') setScannerUpdateMsg('Building scanner (takes ~3 mins)...');
+          else if (state.status === 'restarting') setScannerUpdateMsg('Restarting service...');
+          else if (state.status === 'success') {
+            clearInterval(poll);
+            setScannerUpdateMsg('✅ Scanner updated successfully!');
+            setIsUpdatingScanner(false);
+          } else if (state.status === 'error') {
+            clearInterval(poll);
+            setScannerUpdateMsg('❌ ' + (state.error || 'Update failed'));
+            setIsUpdatingScanner(false);
+          }
+        } catch (_) {}
+      }, 2000);
+    } catch (e) {
+      setScannerUpdateMsg('❌ ' + (e.message || 'Update request failed'));
+      setIsUpdatingScanner(false);
     }
   };
 
@@ -213,6 +248,29 @@ export function SettingsModal({ onClose, onSave, drives }) {
               {updateMsg && (
                 <div style={{ fontSize: '0.75rem', marginTop: 10, color: updateMsg.includes('❌') ? 'var(--rose)' : 'var(--emerald)', whiteSpace: 'pre-wrap' }}>
                   {updateMsg}
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: '14px', background: 'var(--bg-2)', borderRadius: 'var(--r-sm)', marginBottom: 22 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: '0.85rem', marginBottom: 8 }}>
+                <RefreshCw size={15} color="var(--text-1)" /><span>Scanner Updates</span>
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: 1.7, marginBottom: 12 }}>
+                Pull the latest code from GitHub, build the WASM, and restart the scanner service.
+              </div>
+              <button
+                className="btn"
+                style={{ width: '100%', background: 'rgba(255,255,255,0.05)', color: 'var(--text-1)', border: '1px solid rgba(255,255,255,0.1)' }}
+                onClick={triggerScannerUpdate}
+                disabled={isUpdatingScanner}
+              >
+                {isUpdatingScanner ? <RefreshCw size={14} className="spin" /> : <RefreshCw size={14} />}
+                <span>{isUpdatingScanner ? 'Updating...' : 'Update Scanner Software'}</span>
+              </button>
+              {scannerUpdateMsg && (
+                <div style={{ fontSize: '0.75rem', marginTop: 10, color: scannerUpdateMsg.includes('❌') ? 'var(--rose)' : (scannerUpdateMsg.includes('✅') ? 'var(--emerald)' : 'var(--cyan)'), whiteSpace: 'pre-wrap' }}>
+                  {scannerUpdateMsg}
                 </div>
               )}
             </div>
