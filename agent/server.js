@@ -1113,6 +1113,13 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
         `find "${srcDir}" -maxdepth 1 -not -name '.env' -not -name 'shares.json' -not -name '.' | xargs -I{} cp -r {} "${destDir}/"`,
         { stdio: 'ignore' }
       );
+      
+      // Build and copy frontend
+      console.log('🏗️ Building frontend...');
+      execSync('npm install', { cwd: repoDir, stdio: 'ignore' });
+      execSync('npm run build', { cwd: repoDir, stdio: 'ignore' });
+      execSync(`rm -rf /opt/dist && cp -r "${repoDir}/dist" /opt/`, { stdio: 'ignore' });
+      console.log('📂 Frontend files copied to /opt/dist');
       console.log('📂 Agent files copied (protected .env and shares.json)');
     } catch (e) {
       console.error('❌ Copy agent files failed:', e.message);
@@ -1157,7 +1164,12 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
   }
 
   try {
-    const pullOutput = execSync('git pull --ff-only', { cwd: repoDir, encoding: 'utf8' }).trim();
+    // Fix permissions so root can pull the repo cloned by root1
+    execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' });
+    execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
+    
+    // Disconnect stdin so it doesn't hang if git prompts for credentials
+    const pullOutput = execSync('git pull --ff-only < /dev/null', { cwd: repoDir, encoding: 'utf8' }).trim();
     
     if (pullOutput.includes('Already up to date')) {
       return res.json({ success: true, message: 'Scanner is already up to date.', pullOutput });
