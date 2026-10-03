@@ -1168,17 +1168,17 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
     execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' });
     execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
     
-    // Disconnect stdin so it doesn't hang if git prompts for credentials
+    // Fetch latest from remote so we know the true state
+    execSync('git fetch --quiet < /dev/null', { cwd: repoDir, stdio: 'pipe' });
     const pullOutput = execSync('git pull --ff-only < /dev/null', { cwd: repoDir, encoding: 'utf8' }).trim();
-    
-    if (pullOutput.includes('Already up to date')) {
-      return res.json({ success: true, message: 'Scanner is already up to date.', pullOutput });
-    }
+    const alreadyUpToDate = pullOutput.includes('Already up to date');
 
     scannerUpdateState = { status: 'installing', logs: '', error: null };
     res.json({ 
       success: true, 
-      message: `Scanner updated successfully. Building WASM in background...\n${pullOutput}`,
+      message: alreadyUpToDate
+        ? `Code is up to date. Rebuilding and restarting scanner...\n${pullOutput}`
+        : `Pulled new code. Building WASM in background...\n${pullOutput}`,
       pullOutput 
     });
 

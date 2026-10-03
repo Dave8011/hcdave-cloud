@@ -87,11 +87,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
       setScannerUpdateMsg('Starting update...');
       const res = await StorageService.updateScanner();
       setScannerUpdateMsg(res.message || 'Update started...');
-      
-      if (res.message && res.message.includes('already up to date')) {
-        setIsUpdatingScanner(false);
-        return;
-      }
+
 
       const poll = setInterval(async () => {
         try {
