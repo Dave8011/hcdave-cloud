@@ -47,6 +47,7 @@ export class StorageService {
     const r = await fetch(`${this.getAgentUrl()}/api/scanner/token`, {
       headers: this.headers()
     });
+    console.log(`[Scanner] scanner token response: ${r.status}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
   }

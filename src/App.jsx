@@ -96,21 +96,23 @@ export default function App() {
 
   /* ── Scanner Handshake ── */
   const handleScanOpen = () => {
+    console.log('[Scanner] button clicked');
     const targetOrigin = 'https://scanner.hcdavecloud.in';
-    const scannerWindow = window.open(targetOrigin, '_blank');
-    
-    if (!scannerWindow || scannerWindow.closed || typeof scannerWindow.closed === 'undefined') {
-      alert('Popup blocked. Please allow popups for this site.');
-      return;
-    }
 
     const messageListener = async (event) => {
+      console.log('[Scanner] message received from:', event.origin);
       if (event.origin !== targetOrigin) return;
+      
+      console.log('[Scanner] message type:', event.data?.type);
       if (event.data && event.data.type === 'SCANNER_READY') {
+        console.log('[Scanner] SCANNER_READY recognized');
+        console.log('[Scanner] requesting scanner token');
         try {
           const data = await StorageService.getScannerToken();
+          console.log('[Scanner] token received:', !!(data && data.token));
           if (data && data.token) {
             scannerWindow.postMessage({ type: 'AUTH_TOKEN', token: data.token }, targetOrigin);
+            console.log('[Scanner] AUTH_TOKEN sent');
           } else {
             throw new Error('No token returned');
           }
@@ -124,6 +126,16 @@ export default function App() {
     };
     
     window.addEventListener('message', messageListener);
+    console.log('[Scanner] message listener attached');
+
+    const scannerWindow = window.open(targetOrigin, '_blank');
+    console.log('[Scanner] window opened:', !!scannerWindow);
+    
+    if (!scannerWindow || scannerWindow.closed || typeof scannerWindow.closed === 'undefined') {
+      alert('Popup blocked. Please allow popups for this site.');
+      window.removeEventListener('message', messageListener);
+      return;
+    }
 
     const checkClosed = setInterval(() => {
       if (scannerWindow.closed) {
