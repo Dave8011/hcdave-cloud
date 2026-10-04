@@ -98,15 +98,26 @@ export default function App() {
   const handleScanOpen = () => {
     console.log('[Scanner] button clicked');
     const targetOrigin = 'https://scanner.hcdavecloud.in';
+    let tokenRequestInFlight = false;
+    let scannerWindow = null;
 
     const messageListener = async (event) => {
       console.log('[Scanner] message received from:', event.origin);
       if (event.origin !== targetOrigin) return;
+      if (event.source !== scannerWindow) return;
       
       console.log('[Scanner] message type:', event.data?.type);
       if (event.data && event.data.type === 'SCANNER_READY') {
         console.log('[Scanner] SCANNER_READY recognized');
+        
+        if (tokenRequestInFlight) {
+          console.log('[Scanner] token request already in flight, ignoring duplicate');
+          return;
+        }
+        
         console.log('[Scanner] requesting scanner token');
+        tokenRequestInFlight = true;
+        
         try {
           const data = await StorageService.getScannerToken();
           console.log('[Scanner] token received:', !!(data && data.token));
@@ -117,18 +128,18 @@ export default function App() {
             throw new Error('No token returned');
           }
         } catch (err) {
+          console.error('[Scanner] Failed to authorize scanner.', err);
           alert('Failed to authorize scanner. ' + err.message);
-          scannerWindow.close();
+        } finally {
+          tokenRequestInFlight = false;
         }
-        window.removeEventListener('message', messageListener);
-        clearInterval(checkClosed);
       }
     };
     
     window.addEventListener('message', messageListener);
     console.log('[Scanner] message listener attached');
 
-    const scannerWindow = window.open(targetOrigin, '_blank');
+    scannerWindow = window.open(targetOrigin, '_blank');
     console.log('[Scanner] window opened:', !!scannerWindow);
     
     if (!scannerWindow || scannerWindow.closed || typeof scannerWindow.closed === 'undefined') {
@@ -141,6 +152,7 @@ export default function App() {
       if (scannerWindow.closed) {
         clearInterval(checkClosed);
         window.removeEventListener('message', messageListener);
+        console.log('[Scanner] listener cleaned up');
       }
     }, 1000);
   };
