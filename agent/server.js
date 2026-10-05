@@ -1097,8 +1097,8 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
     // (root1), which causes 'cannot open .git/FETCH_HEAD: Permission denied'.
     // Fix: take ownership of the repo dir, mark it safe, then pull.
     try {
-      execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' });
-      execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
+      try { execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' }); } catch(e) {}
+      try { execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' }); } catch(e) {}
       pullOutput = execSync('git reset --hard HEAD && git pull --rebase=false', { cwd: repoDir, encoding: 'utf8' }).trim();
       console.log('📥 Git pull output:', pullOutput);
     } catch (e) {
@@ -1169,13 +1169,13 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
   }
 
   try {
-    // Fix permissions so root can pull the repo cloned by root1
-    execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' });
-    execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' });
+    // Fix permissions so root can pull the repo cloned by root1 (ignore if fails)
+    try { execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' }); } catch(e) {}
+    try { execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' }); } catch(e) {}
     
     // Fetch latest from remote so we know the true state
     execSync('git fetch --quiet < /dev/null', { cwd: repoDir, stdio: 'pipe' });
-    const pullOutput = execSync('git pull --ff-only < /dev/null', { cwd: repoDir, encoding: 'utf8' }).trim();
+    const pullOutput = execSync('git reset --hard HEAD && git pull --rebase=false < /dev/null', { cwd: repoDir, encoding: 'utf8' }).trim();
     const alreadyUpToDate = pullOutput.includes('Already up to date');
 
     scannerUpdateState = { status: 'installing', logs: '', error: null };
@@ -1246,7 +1246,8 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
   })();
   } catch (e) {
     const pullError = e.stderr?.toString() || e.message;
-    return res.status(500).json({ error: 'Git pull failed', detail: pullError });
+    console.error('Git pull failed in update endpoint:', pullError);
+    return res.status(500).json({ error: 'Git pull failed: ' + pullError, detail: pullError });
   }
 });
 
