@@ -133,6 +133,11 @@ export default function App() {
         } finally {
           tokenRequestInFlight = false;
         }
+      } else if (event.data && event.data.type === 'SCANNER_DONE') {
+        console.log('[Scanner] SCANNER_DONE recognized');
+        window.focus();
+        scannerWindow.close();
+        // The checkClosed interval will detect scannerWindow.closed and handle cleanup.
       }
     };
     
