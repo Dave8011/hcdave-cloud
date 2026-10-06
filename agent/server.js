@@ -223,13 +223,14 @@ async function updateDrives() {
         const stat = fs.statSync(fullPath);
         if (!stat.isDirectory()) continue;
 
-        // Allow directories on the root filesystem to act as drives
-        // if they are placed in /mnt or /media, effectively reverting 
-        // the strict mount-point check to fix undetected master SSDs.
+        // Must be a real mount point — different device ID from its parent directory
         const parentStat = fs.statSync(base);
-        // if (stat.dev === parentStat.dev) continue; // Removed to prevent hiding supra1 etc.
+        if (stat.dev === parentStat.dev) continue;
 
-        let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = '', uuid = '';
+        // Skip the OS/internal drive — any filesystem that shares the same
+        // device as root ('/') is the system disk (e.g. Dell Wyse 8 GB eMMC)
+        const rootStat = fs.statSync('/');
+        if (stat.dev === rootStat.dev) continue;
         try {
           // 2 s timeout — stale/removed drives hang df indefinitely
           const { stdout } = await execAsync(`df -B1G "${fullPath}" --output=size,used,avail,source 2>/dev/null | tail -n 1`, { timeout: 2000 });
