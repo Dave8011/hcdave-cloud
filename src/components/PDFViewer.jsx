@@ -9,20 +9,61 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
+// LazyThumbnail wraps a Page component and only renders it when visible
+function LazyThumbnail({ pageNum, isActive, onClick }) {
+  const [isVisible, setIsVisible] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsVisible(true);
+        }
+      },
+      { rootMargin: '200px' }
+    );
+    if (containerRef.current) observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div 
+      ref={containerRef} 
+      className={`pdf-thumbnail-wrap ${isActive ? 'active' : ''}`}
+      onClick={() => onClick(pageNum)}
+    >
+      <div className="pdf-thumbnail-number">Page {pageNum}</div>
+      {isVisible ? (
+        <Page
+          pageNumber={pageNum}
+          width={window.innerWidth <= 768 ? 80 : 160} // smaller on mobile
+          renderTextLayer={false}
+          renderAnnotationLayer={false}
+          className="pdf-thumbnail-page"
+        />
+      ) : (
+        <div className="pdf-thumbnail-placeholder"></div>
+      )}
+    </div>
+  );
+}
+
 export function PDFViewer({ url, fileName, onClose, onDownload }) {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [scale, setScale] = useState(1.0);
-  const [fitMode, setFitMode] = useState(null); // 'width' | 'page' | null
+  const [fitMode, setFitMode] = useState(null);
   const [containerDimensions, setContainerDimensions] = useState({ width: 0, height: 0 });
   const containerRef = useRef(null);
   const inputRef = useRef(null);
+  const sidebarRef = useRef(null);
   
   useEffect(() => {
     const updateDimensions = () => {
       if (containerRef.current) {
         setContainerDimensions({
-          width: containerRef.current.clientWidth - 48, // 24px padding on each side
+          width: containerRef.current.clientWidth - 48,
           height: containerRef.current.clientHeight - 48,
         });
       }
@@ -38,7 +79,8 @@ export function PDFViewer({ url, fileName, onClose, onDownload }) {
   }
 
   const changePage = (offset) => {
-    setPageNumber(prev => Math.min(Math.max(1, prev + offset), numPages || 1));
+    const next = Math.min(Math.max(1, pageNumber + offset), numPages || 1);
+    setPageNumber(next);
   };
 
   const handlePageInput = (e) => {
@@ -63,8 +105,19 @@ export function PDFViewer({ url, fileName, onClose, onDownload }) {
     setFitMode(null);
   };
 
+  // Auto-scroll sidebar to keep active thumbnail in view
+  useEffect(() => {
+    if (sidebarRef.current) {
+      const activeThumb = sidebarRef.current.querySelector('.pdf-thumbnail-wrap.active');
+      if (activeThumb) {
+        activeThumb.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      }
+    }
+  }, [pageNumber]);
+
   return (
     <div className="pdf-viewer-overlay">
+      {/* 1. PDF Toolbar */}
       <div className="pdf-viewer-toolbar">
         <div className="pdf-toolbar-group">
           <button className="btn btn-ghost icon-btn" onClick={onClose} title="Close">
@@ -83,7 +136,7 @@ export function PDFViewer({ url, fileName, onClose, onDownload }) {
               type="text" 
               className="pdf-page-input"
               defaultValue={pageNumber}
-              key={pageNumber} // force re-render on change
+              key={pageNumber} 
               onKeyDown={handlePageInput}
               onBlur={(e) => { e.target.value = pageNumber; }}
             />
@@ -124,34 +177,44 @@ export function PDFViewer({ url, fileName, onClose, onDownload }) {
         </div>
       </div>
 
-      <div className="pdf-viewer-content" ref={containerRef}>
-        {url ? (
+      <div className="pdf-viewer-body">
+        {url && (
           <Document
             file={url}
             onLoadSuccess={onDocumentLoadSuccess}
-            loading={
-              <div className="pdf-loading">
-                <span className="loader"></span> Loading PDF...
-              </div>
-            }
-            error={
-              <div className="pdf-error">
-                Failed to load PDF. Please try downloading it.
-              </div>
-            }
+            loading={<div className="pdf-loading"><span className="loader"></span> Loading PDF...</div>}
+            error={<div className="pdf-error">Failed to load PDF. Please try downloading it.</div>}
+            className="pdf-document-wrapper"
           >
-            <Page
-              pageNumber={pageNumber}
-              scale={fitMode ? undefined : scale}
-              width={fitMode === 'width' ? containerDimensions.width : undefined}
-              height={fitMode === 'page' ? containerDimensions.height : undefined}
-              loading={<div className="pdf-page-loading">Rendering page...</div>}
-              renderTextLayer={true}
-              renderAnnotationLayer={true}
-              className="pdf-page-container"
-            />
+            {/* 2. PDF Thumbnail Sidebar */}
+            {numPages && (
+              <div className="pdf-thumbnail-sidebar" ref={sidebarRef}>
+                {Array.from(new Array(numPages), (el, index) => (
+                  <LazyThumbnail 
+                    key={`thumb_${index + 1}`}
+                    pageNum={index + 1}
+                    isActive={pageNumber === index + 1}
+                    onClick={setPageNumber}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* 3. PDF Canvas Area */}
+            <div className="pdf-viewer-content" ref={containerRef}>
+              <Page
+                pageNumber={pageNumber}
+                scale={fitMode ? undefined : scale}
+                width={fitMode === 'width' ? containerDimensions.width : undefined}
+                height={fitMode === 'page' ? containerDimensions.height : undefined}
+                loading={<div className="pdf-page-loading">Rendering page...</div>}
+                renderTextLayer={true}
+                renderAnnotationLayer={true}
+                className="pdf-page-container"
+              />
+            </div>
           </Document>
-        ) : null}
+        )}
       </div>
     </div>
   );
