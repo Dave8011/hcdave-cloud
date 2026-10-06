@@ -88,27 +88,50 @@ export function TerminalPanel() {
 
   if (!sudoToken) {
     return (
-      <div style={{ padding: 24, textAlign: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.05)' }}>
-        <ShieldAlert size={48} color="#ef4444" style={{ marginBottom: 16 }} />
-        <h3 style={{ margin: '0 0 8px 0', color: '#ef4444' }}>⚠️ Administrator Terminal</h3>
-        <p style={{ color: 'var(--text-2)', fontSize: '0.85rem', marginBottom: 24, maxWidth: 400, margin: '0 auto 24px auto', lineHeight: 1.5 }}>
-          Commands run here can modify or delete files, services, and system configuration. 
-          Please re-enter your Master Password to unlock the terminal.
+      <div style={{
+        padding: '40px 24px', textAlign: 'center', background: 'linear-gradient(145deg, rgba(20,20,22,1) 0%, rgba(9,9,11,1) 100%)',
+        borderRadius: 16, border: '1px solid rgba(239,68,68,0.2)', boxShadow: '0 8px 32px rgba(239,68,68,0.1)'
+      }}>
+        <div style={{
+          width: 80, height: 80, borderRadius: '50%', background: 'rgba(239,68,68,0.1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px auto',
+          boxShadow: '0 0 20px rgba(239,68,68,0.2)'
+        }}>
+          <ShieldAlert size={40} color="#ef4444" />
+        </div>
+        <h3 style={{ margin: '0 0 12px 0', color: '#f87171', fontSize: '1.4rem', letterSpacing: '0.05em' }}>Administrator Terminal</h3>
+        <p style={{ color: 'var(--text-2)', fontSize: '0.9rem', marginBottom: 32, maxWidth: 420, margin: '0 auto 32px auto', lineHeight: 1.6 }}>
+          You are entering a high-privilege zone. Commands executed here have full system access.
+          Authenticate to continue.
         </p>
-        <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center' }}>
-          <div style={{ position: 'relative', width: 260 }}>
-            <Lock size={16} color="var(--text-3)" style={{ position: 'absolute', left: 12, top: 12 }} />
+        <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' }}>
+          <div style={{ position: 'relative', width: 280 }}>
+            <Lock size={18} color="#ef4444" style={{ position: 'absolute', left: 14, top: 13 }} />
             <input
               type="password"
-              placeholder="Master Password"
+              placeholder="Enter Master Password"
               value={sudoPassword}
               onChange={e => setSudoPassword(e.target.value)}
-              style={{ width: '100%', padding: '10px 10px 10px 38px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: '#fff' }}
+              style={{
+                width: '100%', padding: '12px 14px 12px 42px', borderRadius: 8,
+                border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(0,0,0,0.4)',
+                color: '#fff', fontSize: '1rem', outline: 'none', transition: 'all 0.2s',
+                boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.5)'
+              }}
+              onFocus={e => e.target.style.borderColor = '#ef4444'}
+              onBlur={e => e.target.style.borderColor = 'rgba(239,68,68,0.3)'}
               autoFocus
             />
           </div>
-          {sudoError && <div style={{ color: '#ef4444', fontSize: '0.8rem' }}>{sudoError}</div>}
-          <button type="submit" className="btn-primary" style={{ width: 260, justifyContent: 'center' }}>
+          {sudoError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 500 }}>{sudoError}</div>}
+          <button type="submit" style={{
+            width: 280, padding: '12px', background: '#ef4444', color: '#fff',
+            borderRadius: 8, border: 'none', fontWeight: 600, fontSize: '0.95rem',
+            cursor: 'pointer', transition: 'all 0.2s', textTransform: 'uppercase', letterSpacing: '0.05em'
+          }}
+          onMouseOver={e => e.target.style.background = '#dc2626'}
+          onMouseOut={e => e.target.style.background = '#ef4444'}
+          >
             Unlock Terminal
           </button>
         </form>
@@ -219,20 +242,29 @@ export function TerminalPanel() {
 
       {/* Output Console */}
       <div style={{
-        background: '#09090b',
-        border: '1px solid rgba(255,255,255,0.08)',
+        background: '#050505',
+        border: '1px solid rgba(16, 185, 129, 0.25)',
+        boxShadow: '0 0 20px rgba(16, 185, 129, 0.05), inset 0 0 10px rgba(0,0,0,0.5)',
         borderRadius: 8,
         flex: 1,
-        minHeight: 250,
-        maxHeight: 400,
+        minHeight: 320,
+        maxHeight: 500,
         overflowY: 'auto',
-        fontFamily: 'monospace',
-        fontSize: '0.85rem',
-        padding: '16px',
-        color: '#e4e4e7',
+        fontFamily: '"Fira Code", "JetBrains Mono", "Courier New", Courier, monospace',
+        fontSize: '0.88rem',
+        padding: '24px 20px',
+        color: '#a1a1aa',
         whiteSpace: 'pre-wrap',
-        wordBreak: 'break-all'
+        wordBreak: 'break-all',
+        position: 'relative'
       }}>
+        {/* Fake window controls */}
+        <div style={{ position: 'absolute', top: 12, left: 16, display: 'flex', gap: 6, opacity: 0.7 }}>
+          <div style={{ width: 11, height: 11, borderRadius: '50%', background: '#ef4444', border: '1px solid #dc2626' }} />
+          <div style={{ width: 11, height: 11, borderRadius: '50%', background: '#f59e0b', border: '1px solid #d97706' }} />
+          <div style={{ width: 11, height: 11, borderRadius: '50%', background: '#10b981', border: '1px solid #059669' }} />
+        </div>
+        <div style={{ height: 12 }} /> {/* spacer for fake window controls */}
         {!output && !running && (
           <div style={{ color: 'var(--text-3)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 6 }}>
             Terminal ready. Type a command to execute.
