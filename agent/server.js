@@ -1254,28 +1254,111 @@ app.get('/api/scanner/update-status', rateLimitAuth, auth, (req, res) => {
 });
 
 
-// ⚠️  TEMPORARY REMOTE TERMINAL ─────────────────────────────────────────────
+// 🛡️ HC CLOUD ADMIN TERMINAL ────────────────────────────────────────────────
+const TERMINAL_SECRET = crypto.randomBytes(32).toString('hex');
+
+function generateTerminalToken() {
+  const timestamp = Date.now();
+  const signature = crypto.createHmac('sha256', TERMINAL_SECRET).update(timestamp.toString()).digest('hex');
+  return Buffer.from(`${timestamp}:${signature}`).toString('base64');
+}
+
+function verifyTerminalToken(token) {
+  try {
+    const decoded = Buffer.from(token, 'base64').toString('utf8');
+    const [tsStr, signature] = decoded.split(':');
+    const timestamp = parseInt(tsStr, 10);
+    if (Date.now() - timestamp > 10 * 60 * 1000) return false; // 10 minutes
+    const expected = crypto.createHmac('sha256', TERMINAL_SECRET).update(tsStr).digest('hex');
+    return expected === signature;
+  } catch(e) {
+    return false;
+  }
+}
+
+function classifyCommand(cmd) {
+  if (/\brm\s+-r[fF]?\s+\//.test(cmd)) return 'BLOCKED';
+  if (/\bmkfs\b/.test(cmd) || /\bdd\s+if=\/dev\/zero\b/.test(cmd)) return 'BLOCKED';
+
+  const parts = cmd.split(/[;&|><\s$()`]+/);
+  const blocked = ['nano', 'vim', 'vi', 'less', 'more', 'top', 'htop', 'ssh'];
+  const dangerous = ['rm', 'reboot', 'shutdown', 'systemctl', 'apt', 'apt-get', 'dpkg', 'fdisk', 'parted', 'mkfs', 'dd'];
+
+  let classification = 'SAFE';
+  for (const part of parts) {
+    const p = part.toLowerCase();
+    if (blocked.includes(p)) return 'BLOCKED';
+    if (dangerous.includes(p)) classification = 'DANGEROUS';
+  }
+  return classification;
+}
+
+function logTerminalAudit(user, ip, status, classification, command) {
+  const time = new Date().toISOString();
+  // Strip newlines from command to prevent log injection
+  const safeCmd = command.replace(/\r?\n/g, ' \\n ');
+  const logLine = `[${time}] [${user}] [${ip}] [${status}] [${classification}] Command: ${safeCmd}\n`;
+  try {
+    fs.appendFileSync('/var/log/hccloud-terminal.log', logLine);
+  } catch (e) {
+    try { fs.appendFileSync(path.join(__dirname, 'terminal.log'), logLine); } catch (_) {}
+  }
+}
+
+app.post('/api/terminal/auth', rateLimitAuth, auth, (req, res) => {
+  const { password } = req.body;
+  if (password !== AUTH_PASSWORD) {
+    return res.status(401).json({ error: 'Incorrect Master Password' });
+  }
+  res.json({ token: generateTerminalToken() });
+});
+
 app.post('/api/terminal/exec', rateLimitAuth, auth, async (req, res) => {
-  const { command } = req.body;
+  const { command, token, confirmDangerous, isLong } = req.body;
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  const user = 'Admin'; // Single user system currently
 
   if (!command || typeof command !== 'string') {
     return res.status(400).json({ error: 'command required' });
   }
 
+  if (!token || !verifyTerminalToken(token)) {
+    logTerminalAudit(user, ip, 'DENIED', 'UNAUTHORIZED', command);
+    return res.status(403).json({ error: 'Terminal session expired or invalid. Please re-authenticate.' });
+  }
+
+  const classification = classifyCommand(command);
+
+  if (classification === 'BLOCKED') {
+    logTerminalAudit(user, ip, 'REJECTED', 'BLOCKED', command);
+    return res.status(403).json({ 
+      error: 'Command blocked for security reasons. Interactive programs and highly destructive commands are not permitted.' 
+    });
+  }
+
+  if (classification === 'DANGEROUS' && !confirmDangerous) {
+    // Return early requiring confirmation, DO NOT log as REJECTED since it's just a prompt
+    return res.json({ requireConfirmation: true, message: 'This command is classified as DANGEROUS. Please confirm to execute.' });
+  }
+
+  logTerminalAudit(user, ip, 'EXECUTING', classification, command);
+
   try {
     const { stdout, stderr } = await execAsync(command, {
-      timeout: 90_000,
+      timeout: isLong ? 300_000 : 30_000,
       maxBuffer: 512 * 1024
     });
+    logTerminalAudit(user, ip, 'SUCCESS', classification, command);
     return res.json({ stdout: stdout || '', stderr: stderr || '' });
   } catch (e) {
+    logTerminalAudit(user, ip, 'FAILED', classification, command);
     return res.json({
       stdout: e.stdout || '',
       stderr: e.stderr || e.message || 'Command failed'
     });
   }
 });
-// ⚠️  END TEMPORARY REMOTE TERMINAL ──────────────────────────────────────────
+// 🛡️ END HC CLOUD ADMIN TERMINAL ─────────────────────────────────────────────
 
 // GET /api/s/:token (Public - Get Share Metadata)
 app.get('/api/s/:token', (req, res) => {

@@ -457,16 +457,27 @@ export class StorageService {
     return data;
   }
 
-  // ⚠️ TEMPORARY — execCommand: remove after Tailscale setup ──────────────────
-  static async execCommand(command) {
+  // 🛡️ HC CLOUD ADMIN TERMINAL ────────────────────────────────────────────────
+  static async authenticateTerminal(password) {
+    const r = await fetch(`${this.getAgentUrl()}/api/terminal/auth`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ password }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Authentication failed');
+    return data.token;
+  }
+
+  static async execCommand(command, token, confirmDangerous = false, isLong = false) {
     const r = await fetch(`${this.getAgentUrl()}/api/terminal/exec`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ command }),
+      body: JSON.stringify({ command, token, confirmDangerous, isLong }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Command failed');
-    return data; // { stdout, stderr }
+    return data; // { stdout, stderr, requireConfirmation, message }
   }
-  // ⚠️ END TEMPORARY ──────────────────────────────────────────────────────────
+  // 🛡️ END HC CLOUD ADMIN TERMINAL ───────────────────────────────────────────
 }
