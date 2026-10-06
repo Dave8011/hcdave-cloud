@@ -223,9 +223,11 @@ async function updateDrives() {
         const stat = fs.statSync(fullPath);
         if (!stat.isDirectory()) continue;
 
-        // Must be a real mount point — different device ID from its parent directory
+        // Allow directories on the root filesystem to act as drives
+        // if they are placed in /mnt or /media, effectively reverting 
+        // the strict mount-point check to fix undetected master SSDs.
         const parentStat = fs.statSync(base);
-        if (stat.dev === parentStat.dev) continue;
+        // if (stat.dev === parentStat.dev) continue; // Removed to prevent hiding supra1 etc.
 
         let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = '', uuid = '';
         try {
