@@ -311,6 +311,16 @@ export class StorageService {
     return data;
   }
 
+  // GET /api/scanner/token
+  static async getScannerToken() {
+    const r = await fetch(`${this.getAgentUrl()}/api/scanner/token`, {
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to get scanner token');
+    return data;
+  }
+
   // GET /api/s/:token
   static async getShareMetadata(token) {
     const r = await fetch(`${this.getAgentUrl()}/api/s/${token}`);
