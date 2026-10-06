@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database, HardDrive, Edit2, AlertTriangle, Monitor } from 'lucide-react';
 import { StorageService } from '../services/api';
 import { CachePanel } from './CachePanel';
+import { TerminalPanel } from './TerminalPanel';
 
 
 export function SettingsModal({ onClose, onSave, drives }) {
@@ -142,6 +143,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
     { key: 'connection', label: 'Connection', Icon: Globe },
     { key: 'drives',     label: 'Drives',     Icon: HardDrive },
     { key: 'cache',      label: 'Video Cache', Icon: Database, badge: cacheWarn },
+    { key: 'terminal',   label: '🖥 Terminal',  Icon: Monitor },
   ];
 
   return (
@@ -305,7 +307,8 @@ export function SettingsModal({ onClose, onSave, drives }) {
         {/* Cache Tab */}
         {tab === 'cache' && <CachePanel drives={drives} />}
 
-
+        {/* Terminal Tab */}
+        {tab === 'terminal' && <TerminalPanel />}
 
         {/* Drives Tab */}
         {tab === 'drives' && (
