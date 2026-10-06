@@ -230,7 +230,7 @@ async function updateDrives() {
         // Skip the OS/internal drive — any filesystem that shares the same
         // device as root ('/') is the system disk (e.g. Dell Wyse 8 GB eMMC)
         const rootStat = fs.statSync('/');
-        if (stat.dev === rootStat.dev) continue;
+        if (stat.dev === rootStat.dev && sub.toLowerCase() !== 'supra1') continue;
 
         let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = '', uuid = '';
         try {
