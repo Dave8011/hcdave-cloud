@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, Film, Image as Img, FileText, Archive, Folder, Loader, AlertCircle, Database, CheckCircle2, Play, Pause, ChevronLeft, ChevronRight } from 'lucide-react';
 import { StorageService } from '../services/api';
+import { PDFViewer } from './PDFViewer';
 
 const ICON_MAP = {
   image:    { Icon: Img,      color: 'var(--cyan)' },
@@ -147,6 +148,19 @@ export function FilePreviewModal({ initialFile, files = [], selectedPaths = new 
   const previewUrl = currentFile.type === 'image'
     ? StorageService.getPreviewUrl(driveId, currentFile.path || currentFile.name)
     : null;
+
+  const isPdf = currentFile.name.toLowerCase().endsWith('.pdf');
+  if (isPdf) {
+    const pdfUrl = StorageService.getStreamUrl(driveId, currentFile.path || currentFile.name);
+    return (
+      <PDFViewer 
+        url={pdfUrl} 
+        fileName={currentFile.name} 
+        onClose={onClose} 
+        onDownload={handleDownload} 
+      />
+    );
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
