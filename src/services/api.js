@@ -42,16 +42,6 @@ export class StorageService {
     }
   }
 
-  // GET /api/scanner/token — Get short-lived token for HC Scanner
-  static async getScannerToken() {
-    const r = await fetch(`${this.getAgentUrl()}/api/scanner/token`, {
-      headers: this.headers()
-    });
-    console.log(`[Scanner] scanner token response: ${r.status}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return await r.json();
-  }
-
   // GET /api/drives — list all detected plug & play drives
   static async getDrives() {
     try {
@@ -467,4 +457,16 @@ export class StorageService {
     return data;
   }
 
+  // ⚠️ TEMPORARY — execCommand: remove after Tailscale setup ──────────────────
+  static async execCommand(command) {
+    const r = await fetch(`${this.getAgentUrl()}/api/terminal/exec`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ command }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Command failed');
+    return data; // { stdout, stderr }
+  }
+  // ⚠️ END TEMPORARY ──────────────────────────────────────────────────────────
 }
