@@ -227,11 +227,6 @@ async function updateDrives() {
         const parentStat = fs.statSync(base);
         if (stat.dev === parentStat.dev) continue;
 
-        // Skip the OS/internal drive — any filesystem that shares the same
-        // device as root ('/') is the system disk (e.g. Dell Wyse 8 GB eMMC)
-        const rootStat = fs.statSync('/');
-        if (stat.dev === rootStat.dev && sub.toLowerCase() !== 'supra1') continue;
-
         let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = '', uuid = '';
         try {
           // 2 s timeout — stale/removed drives hang df indefinitely
