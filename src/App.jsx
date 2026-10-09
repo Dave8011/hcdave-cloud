@@ -47,7 +47,13 @@ export default function App() {
     const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5, 'Storage': 6 };
     const list = rawList.sort((a, b) => (roleOrder[a.role] || 99) - (roleOrder[b.role] || 99));
     setDrives(list);
-    if (list.length && !activeDriveId) setActiveDriveId(list[0].id);
+    if (list.length) {
+      if (!activeDriveId || !list.find(d => d.id === activeDriveId)) {
+        setActiveDriveId(list[0].id);
+      }
+    } else {
+      setActiveDriveId(null);
+    }
     // Refresh cache drive stats in background
     StorageService.getCacheStatus().then(cs => setDriveStats(cs.driveStats || [])).catch(() => {});
   }, [activeDriveId]);
