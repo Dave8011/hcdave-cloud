@@ -1094,16 +1094,19 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
     // Step 1: Fix git ownership + run git pull
     // The service runs as root but the repo may have been cloned as another user
     // (root1), which causes 'cannot open .git/FETCH_HEAD: Permission denied'.
-    // Fix: take ownership of the repo dir, mark it safe, then pull.
+    // Fix: take ownership of the repo dir, mark it safe, then fetch and hard reset.
     try {
-      try { execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' }); } catch(e) {}
+      try { execSync(`chown -R $(whoami) "${repoDir}"`, { stdio: 'ignore' }); } catch(e) {}
       try { execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' }); } catch(e) {}
-      pullOutput = execSync('git reset --hard HEAD && git pull --rebase=false', { cwd: repoDir, encoding: 'utf8' }).trim();
-      console.log('📥 Git pull output:', pullOutput);
+      
+      // Forcefully match remote origin to avoid any local divergence or merge conflicts
+      const pullCmd = 'git fetch origin main && git reset --hard origin/main && git clean -fd';
+      pullOutput = execSync(pullCmd, { cwd: repoDir, encoding: 'utf8' }).trim();
+      console.log('📥 Git sync output:', pullOutput);
     } catch (e) {
       pullError = e.stderr?.toString() || e.message;
-      console.error('❌ Git pull failed:', pullError);
-      return res.status(500).json({ success: false, error: 'Git pull failed', detail: pullError });
+      console.error('❌ Git sync failed:', pullError);
+      return res.status(500).json({ success: false, error: 'Git update failed', detail: pullError });
     }
 
     // Step 2: Copy agent files — NEVER overwrite .env (has the user's setup password)
@@ -1169,13 +1172,13 @@ app.post('/api/scanner/update', rateLimitAuth, auth, (req, res) => {
 
   try {
     // Fix permissions so root can pull the repo cloned by root1 (ignore if fails)
-    try { execSync(`chown -R root:root "${repoDir}"`, { stdio: 'ignore' }); } catch(e) {}
+    try { execSync(`chown -R $(whoami) "${repoDir}"`, { stdio: 'ignore' }); } catch(e) {}
     try { execSync('git config --global --add safe.directory "*"', { stdio: 'ignore' }); } catch(e) {}
     
-    // Fetch latest from remote so we know the true state
-    execSync('git fetch --quiet < /dev/null', { cwd: repoDir, stdio: 'pipe' });
-    const pullOutput = execSync('git reset --hard HEAD && git pull --rebase=false < /dev/null', { cwd: repoDir, encoding: 'utf8' }).trim();
-    const alreadyUpToDate = pullOutput.includes('Already up to date');
+    // Forcefully match remote origin to avoid any local divergence or merge conflicts
+    const pullCmd = 'git fetch origin main && git reset --hard origin/main && git clean -fd';
+    const pullOutput = execSync(pullCmd, { cwd: repoDir, encoding: 'utf8' }).trim();
+    const alreadyUpToDate = pullOutput.includes('HEAD is now at');
 
     scannerUpdateState = { status: 'installing', logs: '', error: null };
     res.json({ 
