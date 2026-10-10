@@ -1128,6 +1128,19 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
       execSync(`rm -rf /opt/dist && cp -r "${repoDir}/dist" /opt/`, { stdio: 'ignore' });
       console.log('📂 Frontend files copied to /opt/dist');
       console.log('📂 Agent files copied (protected .env and shares.json)');
+
+      // Update system-level scripts
+      try {
+        console.log('⚙️ Updating system-level automount scripts...');
+        execSync(`cp "${repoDir}/scripts/hcdave-automount.sh" /usr/local/bin/hcdave-automount.sh`);
+        execSync('chmod +x /usr/local/bin/hcdave-automount.sh');
+        execSync(`cp "${repoDir}/scripts/99-hcdave-automount.rules" /etc/udev/rules.d/99-hcdave-automount.rules`);
+        execSync(`cp "${repoDir}/scripts/hcdave-automount@.service" /etc/systemd/system/hcdave-automount@.service`);
+        execSync('udevadm control --reload-rules');
+        execSync('systemctl daemon-reload');
+      } catch (sysErr) {
+        console.error('⚠️ Warning: failed to update system-level scripts:', sysErr.message);
+      }
     } catch (e) {
       console.error('❌ Copy agent files failed:', e.message);
       return res.status(500).json({ success: false, error: 'Failed to copy agent files', detail: e.message });
