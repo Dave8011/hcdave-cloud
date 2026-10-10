@@ -1,12 +1,11 @@
 # /etc/udev/rules.d/99-hcdave-automount.rules
-# Trigger automount script for new block devices
+# Trigger automount script for new block devices via systemd
 
 # Skip non-filesystem devices, loops, ramdisks, cdroms, etc.
 ENV{ID_FS_USAGE}!="filesystem", GOTO="hcdave_automount_end"
 KERNEL=="loop*|ram*|sr*|fd*", GOTO="hcdave_automount_end"
 
-# Pass DEVNAME, UUID, and LABEL to the automount script
-ACTION=="add", SUBSYSTEM=="block", RUN+="/usr/local/bin/hcdave-automount.sh add %k $env{ID_FS_UUID} $env{ID_FS_LABEL}"
-ACTION=="remove", SUBSYSTEM=="block", RUN+="/usr/local/bin/hcdave-automount.sh remove %k"
+# Delegate mounting to a systemd service to avoid udev RUN restrictions
+ACTION=="add", SUBSYSTEM=="block", TAG+="systemd", ENV{SYSTEMD_WANTS}+="hcdave-automount@%k.service"
 
 LABEL="hcdave_automount_end"

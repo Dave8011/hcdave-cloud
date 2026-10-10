@@ -1,0 +1,10 @@
+[Unit]
+Description=HC Dave Automount for %I
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/hcdave-automount.sh add %I
+ExecStop=/usr/local/bin/hcdave-automount.sh remove %I

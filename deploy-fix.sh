@@ -15,9 +15,11 @@ cp scripts/hcdave-automount.sh /usr/local/bin/hcdave-automount.sh
 chmod +x /usr/local/bin/hcdave-automount.sh
 
 cp scripts/99-hcdave-automount.rules /etc/udev/rules.d/99-hcdave-automount.rules
+cp scripts/hcdave-automount@.service /etc/systemd/system/hcdave-automount@.service
 
-echo "Reloading udev rules..."
+echo "Reloading udev rules and systemd..."
 udevadm control --reload-rules
+systemctl daemon-reload
 # Trigger an add event for existing block devices so they get mounted if not already
 udevadm trigger --subsystem-match=block --action=add
 
