@@ -2,6 +2,9 @@ const express  = require('express');
 const cors     = require('cors');
 const fs       = require('fs');
 const path     = require('path');
+const http     = require('http');
+const https    = require('https');
+const net      = require('net');
 const { execSync, exec } = require('child_process');
 const util     = require('util');
 const execAsync = util.promisify(exec);
@@ -147,16 +150,68 @@ function auth(req, res, next) {
 }
 
 /* ─────────────────────────────────────────────
-   PATH TRAVERSAL GUARD
+   PATH TRAVERSAL GUARD & FILENAME SANITIZATION
    ───────────────────────────────────────────── */
 function safePath(baseDir, userPath) {
-  // Remove leading slashes so path.join doesn't treat it as absolute root
-  const cleanPath = (userPath || '/').replace(/^(\/|\\)+/, '').replace(/(\.\.\/|\.\.\\)/g, '');
-  const resolved = path.normalize(path.join(baseDir, cleanPath));
-  if (!resolved.startsWith(path.resolve(baseDir))) {
+  const resolvedBase = path.resolve(baseDir);
+  // Remove leading slashes/backslashes
+  const cleanPath = (userPath || '/').replace(/^(\/|\\)+/, '');
+  const resolved = path.resolve(resolvedBase, cleanPath);
+  const rel = path.relative(resolvedBase, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel) || (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + path.sep))) {
     throw new Error('Path traversal attempt blocked');
   }
   return resolved;
+}
+
+function verifySafeContainment(baseDir, relativeOrFilename) {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedTarget = path.resolve(baseDir, relativeOrFilename);
+  const rel = path.relative(resolvedBase, resolvedTarget);
+  if (rel.startsWith('..') || path.isAbsolute(rel) || rel === '' || !resolvedTarget.startsWith(resolvedBase + path.sep)) {
+    throw new Error('Path traversal attempt blocked: path escapes destination directory');
+  }
+  return resolvedTarget;
+}
+
+function sanitizeFilename(rawName, fallback = 'upload') {
+  if (typeof rawName !== 'string') return fallback;
+  let name = rawName;
+  try {
+    name = decodeURIComponent(name);
+  } catch (_) {}
+
+  // Strip null bytes and control characters
+  name = name.replace(/[\x00-\x1F\x7F]/g, '');
+
+  // Split on both forward slash and backslash
+  const segments = name.split(/[/\\]+/).filter(Boolean);
+  let base = segments.length > 0 ? segments[segments.length - 1] : '';
+
+  // Remove any leading dots
+  base = base.replace(/^\.+/, '');
+
+  // Strip characters unsafe on Windows / Linux / macOS
+  base = base.replace(/[<>:"/\\|?*\x00-\x1F\x7F]/g, '_').trim();
+
+  // Strip trailing dots or spaces
+  base = base.replace(/[. ]+$/, '');
+
+  // Path basename enforcement
+  base = path.basename(base);
+
+  if (!base || base === '.' || base === '..' || base.trim() === '') {
+    base = fallback;
+  }
+
+  // Truncate to max 255 chars, keeping extension
+  if (base.length > 255) {
+    const ext = path.extname(base);
+    const stem = path.basename(base, ext);
+    base = stem.slice(0, Math.max(1, 255 - ext.length)) + ext;
+  }
+
+  return base;
 }
 
 /* ─────────────────────────────────────────────
@@ -325,7 +380,6 @@ function getSystemTemperature() {
   }
 }
 
-const net = require('net');
 function checkInternetConnectivity(timeoutMs = 1500) {
   return new Promise((resolve) => {
     const socket = net.createConnection({ host: '1.1.1.1', port: 53, timeout: timeoutMs }, () => {
@@ -391,7 +445,7 @@ const multerStorage = multer.diskStorage({
     cb(null, destPath);
   },
   filename(req, file, cb) {
-    cb(null, file.originalname);
+    cb(null, sanitizeFilename(file.originalname, 'upload'));
   }
 });
 const upload = multer({ storage: multerStorage, limits: { fileSize: 50 * 1024 * 1024 * 1024 } }); // 50 GB max
@@ -2718,13 +2772,16 @@ app.post('/api/hc/upload', authScanner, (req, res) => {
 /* ─────────────────────────────────────────────
    START
    ───────────────────────────────────────────── */
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🔒 HC Dave Cloud — Storage Agent`);
-  console.log(`   Port:    ${PORT}`);
-  console.log(`   Domain:  hcdavecloud.in`);
-  console.log(`   CORS:    ${ALLOWED_ORIGIN}`);
-  console.log(`   Drives:  scanning /mnt /media /run/media\n`);
-});
+let server = null;
+if (require.main === module) {
+  server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🔒 HC Dave Cloud — Storage Agent`);
+    console.log(`   Port:    ${PORT}`);
+    console.log(`   Domain:  hcdavecloud.in`);
+    console.log(`   CORS:    ${ALLOWED_ORIGIN}`);
+    console.log(`   Drives:  scanning /mnt /media /run/media\n`);
+  });
+}
 
 /* ═══════════════════════════════════════════════════════════════
    VIDEO CACHE ENGINE
@@ -3557,21 +3614,107 @@ loadRemoteDownloads();
 
 const activeDownloadReqs = new Map();
 
-function isPrivateIp(ip) {
-  if (!ip) return true;
-  if (ip === 'localhost' || ip === '0.0.0.0' || ip === '::1') return true;
-  if (ip.startsWith('127.')) return true;
-  if (ip.startsWith('10.')) return true;
-  if (ip.startsWith('192.168.')) return true;
-  if (ip.startsWith('169.254.')) return true;
+function parseIpv4(ip) {
   const parts = ip.split('.').map(Number);
-  if (parts.length === 4) {
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-    if (parts[0] === 0) return true;
+  if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return null;
+  return ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+}
+
+function matchIpv4Cidr(ipInt, baseInt, prefix) {
+  const mask = prefix === 0 ? 0 : ((~0 << (32 - prefix)) >>> 0);
+  return ((ipInt & mask) >>> 0) === ((baseInt & mask) >>> 0);
+}
+
+const IPV4_BLOCKED_RANGES = [
+  { cidr: '0.0.0.0/8',          base: parseIpv4('0.0.0.0'),         prefix: 8 },
+  { cidr: '10.0.0.0/8',         base: parseIpv4('10.0.0.0'),        prefix: 8 },
+  { cidr: '100.64.0.0/10',      base: parseIpv4('100.64.0.0'),      prefix: 10 },
+  { cidr: '127.0.0.0/8',        base: parseIpv4('127.0.0.0'),       prefix: 8 },
+  { cidr: '169.254.0.0/16',     base: parseIpv4('169.254.0.0'),     prefix: 16 },
+  { cidr: '172.16.0.0/12',      base: parseIpv4('172.16.0.0'),      prefix: 12 },
+  { cidr: '192.0.0.0/24',       base: parseIpv4('192.0.0.0'),       prefix: 24 },
+  { cidr: '192.0.2.0/24',       base: parseIpv4('192.0.2.0'),       prefix: 24 },
+  { cidr: '192.88.99.0/24',     base: parseIpv4('192.88.99.0'),     prefix: 24 },
+  { cidr: '192.168.0.0/16',     base: parseIpv4('192.168.0.0'),     prefix: 16 },
+  { cidr: '198.18.0.0/15',      base: parseIpv4('198.18.0.0'),      prefix: 15 },
+  { cidr: '198.51.100.0/24',    base: parseIpv4('198.51.100.0'),    prefix: 24 },
+  { cidr: '203.0.113.0/24',     base: parseIpv4('203.0.113.0'),     prefix: 24 },
+  { cidr: '224.0.0.0/4',        base: parseIpv4('224.0.0.0'),       prefix: 4 },
+  { cidr: '240.0.0.0/4',        base: parseIpv4('240.0.0.0'),       prefix: 4 },
+  { cidr: '255.255.255.255/32', base: parseIpv4('255.255.255.255'), prefix: 32 }
+];
+
+function parseIpv6(ip) {
+  let cleanIp = ip.toLowerCase();
+  const v4match = cleanIp.match(/:(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4match) {
+    const v4 = v4match[1].split('.').map(Number);
+    if (v4.length === 4 && !v4.some(p => isNaN(p) || p < 0 || p > 255)) {
+      const hex = ((v4[0] << 8) | v4[1]).toString(16).padStart(4, '0') + ':' + ((v4[2] << 8) | v4[3]).toString(16).padStart(4, '0');
+      cleanIp = cleanIp.substring(0, v4match.index + 1) + hex;
+    }
   }
-  const lower = ip.toLowerCase();
-  if (lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80')) return true;
-  return false;
+  const parts = cleanIp.split('::');
+  if (parts.length > 2) return null;
+  let leftParts = parts[0] ? parts[0].split(':').filter(Boolean) : [];
+  let rightParts = parts[1] !== undefined ? parts[1].split(':').filter(Boolean) : null;
+  let fullParts;
+  if (rightParts !== null) {
+    const missing = 8 - (leftParts.length + rightParts.length);
+    if (missing < 0) return null;
+    fullParts = [...leftParts, ...Array(missing).fill('0'), ...rightParts];
+  } else {
+    fullParts = leftParts;
+  }
+  if (fullParts.length !== 8) return null;
+  let big = 0n;
+  for (const p of fullParts) {
+    if (!/^[0-9a-f]{1,4}$/i.test(p)) return null;
+    big = (big << 16n) + BigInt(parseInt(p, 16));
+  }
+  return big;
+}
+
+function matchIpv6Cidr(ipBig, baseBig, prefix) {
+  const mask = prefix === 0 ? 0n : ((~0n << BigInt(128 - prefix)) & ((1n << 128n) - 1n));
+  return (ipBig & mask) === (baseBig & mask);
+}
+
+const IPV6_BLOCKED_RANGES = [
+  { cidr: '::/128',          base: parseIpv6('::'),          prefix: 128 },
+  { cidr: '::1/128',         base: parseIpv6('::1'),         prefix: 128 },
+  { cidr: '::ffff:0:0/96',   base: parseIpv6('::ffff:0:0'),   prefix: 96 },
+  { cidr: '64:ff9b::/96',    base: parseIpv6('64:ff9b::'),    prefix: 96 },
+  { cidr: '100::/64',        base: parseIpv6('100::'),        prefix: 64 },
+  { cidr: '2001:db8::/32',   base: parseIpv6('2001:db8::'),   prefix: 32 },
+  { cidr: '2002::/16',       base: parseIpv6('2002::'),       prefix: 16 },
+  { cidr: 'fc00::/7',        base: parseIpv6('fc00::'),        prefix: 7 },
+  { cidr: 'fe80::/10',       base: parseIpv6('fe80::'),       prefix: 10 },
+  { cidr: 'ff00::/8',        base: parseIpv6('ff00::'),        prefix: 8 }
+];
+
+function isPrivateOrReservedIp(ip) {
+  if (!ip || typeof ip !== 'string') return true;
+  const trimmed = ip.trim();
+  if (trimmed === 'localhost') return true;
+
+  const v4Int = parseIpv4(trimmed);
+  if (v4Int !== null) {
+    for (const r of IPV4_BLOCKED_RANGES) {
+      if (matchIpv4Cidr(v4Int, r.base, r.prefix)) return true;
+    }
+    return false;
+  }
+
+  const v6Big = parseIpv6(trimmed);
+  if (v6Big !== null) {
+    for (const r of IPV6_BLOCKED_RANGES) {
+      if (matchIpv6Cidr(v6Big, r.base, r.prefix)) return true;
+    }
+    return false;
+  }
+
+  return true;
 }
 
 async function validateUrlForSsrf(targetUrl) {
@@ -3589,10 +3732,20 @@ async function validateUrlForSsrf(targetUrl) {
     throw new Error('Access to local/internal network hostnames is blocked for security');
   }
 
+  if (net.isIP(hostname)) {
+    if (isPrivateOrReservedIp(hostname)) {
+      throw new Error(`Access to private/internal IP address (${hostname}) is blocked for security`);
+    }
+  }
+
+  let records;
   try {
-    const records = await dnsPromises.lookup(hostname, { all: true });
+    records = await dnsPromises.lookup(hostname, { all: true });
+    if (!records || records.length === 0) {
+      throw new Error(`DNS resolution failed for hostname "${hostname}": No records found`);
+    }
     for (const rec of records) {
-      if (isPrivateIp(rec.address)) {
+      if (isPrivateOrReservedIp(rec.address)) {
         throw new Error(`Access to private/internal IP address (${rec.address}) is blocked for security`);
       }
     }
@@ -3600,10 +3753,30 @@ async function validateUrlForSsrf(targetUrl) {
     if (err.message.includes('blocked for security')) throw err;
     throw new Error(`DNS resolution failed for hostname "${hostname}": ${err.message}`);
   }
-  return parsed;
+
+  const pinnedRecord = records[0];
+  return {
+    parsedUrl: parsed,
+    url: parsed.toString(),
+    pinnedIp: pinnedRecord.address,
+    pinnedFamily: pinnedRecord.family
+  };
 }
 
-function startDownloadTask(task) {
+async function startDownloadTask(task) {
+  if (!task.pinnedIp) {
+    try {
+      const validated = await validateUrlForSsrf(task.url);
+      task.pinnedIp = validated.pinnedIp;
+      task.pinnedFamily = validated.pinnedFamily;
+    } catch (err) {
+      task.status = 'failed';
+      task.error = 'Security validation failed: ' + err.message;
+      saveRemoteDownloads();
+      return;
+    }
+  }
+
   const parsed = new URL(task.url);
   const client = parsed.protocol === 'https:' ? https : http;
 
@@ -3631,11 +3804,38 @@ function startDownloadTask(task) {
   let lastBytes = existingBytes;
   let lastTime = Date.now();
 
-  const req = client.get(task.url, { headers }, (res) => {
+  const customLookup = (hostname, opts, cb) => {
+    if (typeof opts === 'function') {
+      cb = opts;
+      opts = {};
+    }
+    if (opts && opts.all) {
+      cb(null, [{ address: task.pinnedIp, family: task.pinnedFamily }]);
+    } else {
+      cb(null, task.pinnedIp, task.pinnedFamily);
+    }
+  };
+
+  const reqOptions = {
+    headers,
+    lookup: customLookup,
+    servername: parsed.hostname
+  };
+
+  const req = client.get(task.url, reqOptions, (res) => {
     if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+      task.redirectCount = (task.redirectCount || 0) + 1;
+      if (task.redirectCount > 5) {
+        task.status = 'failed';
+        task.error = 'Redirect blocked: too many redirects';
+        saveRemoteDownloads();
+        return;
+      }
       const redirectUrl = new URL(res.headers.location, task.url).toString();
-      validateUrlForSsrf(redirectUrl).then(() => {
+      validateUrlForSsrf(redirectUrl).then((validated) => {
         task.url = redirectUrl;
+        task.pinnedIp = validated.pinnedIp;
+        task.pinnedFamily = validated.pinnedFamily;
         startDownloadTask(task);
       }).catch(err => {
         task.status = 'failed';
@@ -3668,16 +3868,42 @@ function startDownloadTask(task) {
       if (cl) task.totalBytes = parseInt(cl, 10);
     }
 
-    if (!task.filename || task.filename === 'download') {
-      const cd = res.headers['content-disposition'];
-      if (cd) {
-        const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i);
-        if (m && m[1]) {
-          task.filename = decodeURIComponent(m[1].trim());
-          task.targetFile = path.join(task.destDir, task.filename);
-          task.partFile = `${task.targetFile}.part`;
+    // Response filename handling via Content-Disposition
+    const cd = res.headers['content-disposition'];
+    if (cd) {
+      const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i);
+      if (m && m[1]) {
+        let rawCdName = m[1].trim();
+        try { rawCdName = decodeURIComponent(rawCdName); } catch (_) {}
+        const safeCdName = sanitizeFilename(rawCdName, task.filename || 'download');
+        try {
+          verifySafeContainment(task.destDir, safeCdName);
+          const newTarget = path.join(task.destDir, safeCdName);
+          const newPart = `${newTarget}.part`;
+          verifySafeContainment(task.destDir, path.basename(newPart));
+
+          if (task.partFile && task.partFile !== newPart && fs.existsSync(task.partFile)) {
+            try {
+              fs.renameSync(task.partFile, newPart);
+            } catch (_) {}
+          }
+          task.filename = safeCdName;
+          task.targetFile = newTarget;
+          task.partFile = newPart;
+        } catch (containErr) {
+          console.warn('[Downloader] Malicious Content-Disposition filename blocked:', rawCdName, containErr.message);
         }
       }
+    }
+
+    // Guarantee containment of partFile before creating write stream
+    try {
+      verifySafeContainment(task.destDir, path.basename(task.partFile));
+    } catch (partErr) {
+      task.status = 'failed';
+      task.error = 'Destination containment failure: ' + partErr.message;
+      saveRemoteDownloads();
+      return;
     }
 
     const writeStream = fs.createWriteStream(task.partFile, { flags: isPartial ? 'a' : 'w' });
@@ -3709,17 +3935,22 @@ function startDownloadTask(task) {
         if (task.status !== 'downloading') return;
 
         try {
-          if (fs.existsSync(task.targetFile)) {
-            const parsedName = path.parse(task.targetFile);
+          verifySafeContainment(task.destDir, path.basename(task.partFile));
+
+          let finalTarget = task.targetFile;
+          if (fs.existsSync(finalTarget)) {
+            const parsedName = path.parse(finalTarget);
             let counter = 1;
-            let finalTarget = task.targetFile;
             while (fs.existsSync(finalTarget)) {
-              finalTarget = path.join(parsedName.dir, `${parsedName.name} (${counter})${parsedName.ext}`);
+              const candidate = `${parsedName.name} (${counter})${parsedName.ext}`;
+              verifySafeContainment(task.destDir, candidate);
+              finalTarget = path.join(task.destDir, candidate);
               counter++;
             }
-            task.targetFile = finalTarget;
-            task.filename = path.basename(finalTarget);
           }
+          verifySafeContainment(task.destDir, path.basename(finalTarget));
+          task.targetFile = finalTarget;
+          task.filename = path.basename(finalTarget);
 
           fs.renameSync(task.partFile, task.targetFile);
 
@@ -3803,7 +4034,8 @@ app.post('/api/remote-downloads', rateLimitAuth, auth, async (req, res) => {
     }
 
     // Validate SSRF first
-    const parsedUrl = await validateUrlForSsrf(url);
+    const validated = await validateUrlForSsrf(url);
+    const parsedUrl = validated.parsedUrl;
 
     const drives = getMountedDrives();
     const drive = drives.find(d => d.id === driveId) || drives[0];
@@ -3813,6 +4045,7 @@ app.post('/api/remote-downloads', rateLimitAuth, auth, async (req, res) => {
     let destDir;
     try {
       destDir = safePath(drive.mount, folder);
+      verifySafeContainment(drive.mount, path.relative(drive.mount, destDir));
     } catch (e) {
       return res.status(400).json({ error: 'Invalid destination directory: ' + e.message });
     }
@@ -3827,16 +4060,20 @@ app.post('/api/remote-downloads', rateLimitAuth, auth, async (req, res) => {
         finalName = 'download';
       }
     }
-    // Sanitize filename
-    finalName = finalName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+    // Sanitize filename and enforce destination containment
+    finalName = sanitizeFilename(finalName, 'download');
+    verifySafeContainment(destDir, finalName);
 
     const targetFile = path.join(destDir, finalName);
     const partFile = `${targetFile}.part`;
+    verifySafeContainment(destDir, path.basename(partFile));
 
     const taskId = `dl_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const task = {
       id: taskId,
       url: parsedUrl.toString(),
+      pinnedIp: validated.pinnedIp,
+      pinnedFamily: validated.pinnedFamily,
       driveId: drive.id,
       driveName: drive.name,
       folder: folder,
@@ -3932,6 +4169,35 @@ app.delete('/api/remote-downloads/:id', rateLimitAuth, auth, (req, res) => {
 const quickDropsFile = path.join(__dirname, 'quickdrops.json');
 let quickDropSessions = new Map();
 
+// Abuse protection: IP & session upload rate limiters
+const quickDropIpLimits = new Map(); // ip -> [timestamps]
+const quickDropSessionLimits = new Map(); // token -> [timestamps]
+
+function checkRateLimit(map, key, maxRequests = 30, windowMs = 60000) {
+  const now = Date.now();
+  const timestamps = (map.get(key) || []).filter(t => now - t < windowMs);
+  if (timestamps.length >= maxRequests) {
+    map.set(key, timestamps);
+    return false;
+  }
+  timestamps.push(now);
+  map.set(key, timestamps);
+  return true;
+}
+
+function getClientIp(req) {
+  return req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+}
+
+function getFreeDiskSpace(targetPath) {
+  try {
+    const stats = fs.statfsSync(targetPath);
+    return stats.bavail * stats.bsize;
+  } catch (_) {
+    return null;
+  }
+}
+
 function loadQuickDrops() {
   try {
     if (fs.existsSync(quickDropsFile)) {
@@ -3955,51 +4221,23 @@ function saveQuickDrops() {
 
 loadQuickDrops();
 
-// Multer storage for QuickDrop uploads
-const quickDropMulterStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const session = quickDropSessions.get(req.params.token);
-    if (!session) return cb(new Error('Invalid or expired QuickDrop session'));
-    const drives = getMountedDrives();
-    const drive = drives.find(d => d.id === session.driveId);
-    if (!drive) return cb(new Error('Destination drive is disconnected'));
-    const dest = safePath(drive.mount, session.folder);
-    fs.mkdirSync(dest, { recursive: true });
-    cb(null, dest);
-  },
-  filename: (req, file, cb) => {
-    const session = quickDropSessions.get(req.params.token);
-    const drives = getMountedDrives();
-    const drive = drives.find(d => d.id === session?.driveId);
-    const dest = drive ? safePath(drive.mount, session.folder) : '/tmp';
-
-    let name = file.originalname;
-    const parsedName = path.parse(name);
-    let target = path.join(dest, name);
-    let counter = 1;
-    while (fs.existsSync(target)) {
-      name = `${parsedName.name} (${counter})${parsedName.ext}`;
-      target = path.join(dest, name);
-      counter++;
-    }
-    cb(null, name);
-  }
-});
-
-const quickDropUpload = multer({
-  storage: quickDropMulterStorage,
-  limits: { fileSize: 20 * 1024 * 1024 * 1024 } // 20 GB limit
-});
-
 // POST /api/quickdrop/create (authenticated)
 app.post('/api/quickdrop/create', rateLimitAuth, auth, (req, res) => {
   try {
-    const { driveId, folder = '/', expiryMinutes = 60, maxFiles } = req.body || {};
+    const {
+      driveId,
+      folder = '/',
+      expiryMinutes = 60,
+      maxFiles = 50,
+      maxFileBytes = 20 * 1024 * 1024 * 1024, // 20 GB default per-file
+      maxTotalBytes = 50 * 1024 * 1024 * 1024  // 50 GB default aggregate
+    } = req.body || {};
     const drives = getMountedDrives();
     const drive = drives.find(d => d.id === driveId) || drives[0];
     if (!drive) return res.status(404).json({ error: 'Drive not found' });
 
     const dest = safePath(drive.mount, folder);
+    verifySafeContainment(drive.mount, path.relative(drive.mount, dest));
     fs.mkdirSync(dest, { recursive: true });
 
     const token = crypto.randomBytes(16).toString('hex');
@@ -4013,7 +4251,10 @@ app.post('/api/quickdrop/create', rateLimitAuth, auth, (req, res) => {
       createdAt: Date.now(),
       expiresAt,
       maxFiles: maxFiles ? parseInt(maxFiles, 10) : null,
+      maxFileBytes: maxFileBytes ? parseInt(maxFileBytes, 10) : (20 * 1024 * 1024 * 1024),
+      maxTotalBytes: maxTotalBytes ? parseInt(maxTotalBytes, 10) : (50 * 1024 * 1024 * 1024),
       uploadedCount: 0,
+      uploadedBytes: 0,
       uploadedFiles: []
     };
 
@@ -4025,7 +4266,10 @@ app.post('/api/quickdrop/create', rateLimitAuth, auth, (req, res) => {
       token,
       expiresAt,
       driveName: drive.name,
-      folder: folder || '/'
+      folder: folder || '/',
+      maxFiles: session.maxFiles,
+      maxFileBytes: session.maxFileBytes,
+      maxTotalBytes: session.maxTotalBytes
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -4046,6 +4290,19 @@ app.get('/api/quickdrop/:token', (req, res) => {
   if (session.maxFiles && session.uploadedCount >= session.maxFiles) {
     return res.status(403).json({ error: 'QuickDrop upload limit reached' });
   }
+  if (session.maxTotalBytes && (session.uploadedBytes || 0) >= session.maxTotalBytes) {
+    return res.status(403).json({ error: 'QuickDrop session quota reached' });
+  }
+
+  const drives = getMountedDrives();
+  const drive = drives.find(d => d.id === session.driveId);
+  let freeBytes = null;
+  if (drive) {
+    try {
+      const dest = safePath(drive.mount, session.folder);
+      freeBytes = getFreeDiskSpace(dest);
+    } catch (_) {}
+  }
 
   res.json({
     valid: true,
@@ -4053,7 +4310,11 @@ app.get('/api/quickdrop/:token', (req, res) => {
     folder: session.folder,
     expiresAt: session.expiresAt,
     uploadedCount: session.uploadedCount,
-    maxFiles: session.maxFiles
+    uploadedBytes: session.uploadedBytes || 0,
+    maxFiles: session.maxFiles,
+    maxFileBytes: session.maxFileBytes,
+    maxTotalBytes: session.maxTotalBytes,
+    freeDiskSpace: freeBytes
   });
 });
 
@@ -4064,8 +4325,12 @@ app.get('/api/quickdrop/:token/status', rateLimitAuth, auth, (req, res) => {
   res.json({
     active: Date.now() <= session.expiresAt,
     uploadedCount: session.uploadedCount,
+    uploadedBytes: session.uploadedBytes || 0,
     uploadedFiles: session.uploadedFiles,
-    expiresAt: session.expiresAt
+    expiresAt: session.expiresAt,
+    maxFiles: session.maxFiles,
+    maxFileBytes: session.maxFileBytes,
+    maxTotalBytes: session.maxTotalBytes
   });
 });
 
@@ -4073,33 +4338,184 @@ app.get('/api/quickdrop/:token/status', rateLimitAuth, auth, (req, res) => {
 app.post('/api/quickdrop/:token/upload', (req, res) => {
   const session = quickDropSessions.get(req.params.token);
   if (!session || Date.now() > session.expiresAt) {
+    if (session) {
+      quickDropSessions.delete(req.params.token);
+      saveQuickDrops();
+    }
     return res.status(410).json({ error: 'QuickDrop session expired' });
   }
+
+  // 1. IP & Session Rate Limiting
+  const clientIp = getClientIp(req);
+  if (!checkRateLimit(quickDropIpLimits, clientIp, 30, 60000)) {
+    return res.status(429).json({ error: 'Too many upload attempts from your IP. Please try again in a minute.' });
+  }
+  if (!checkRateLimit(quickDropSessionLimits, session.token, 30, 60000)) {
+    return res.status(429).json({ error: 'Upload rate limit reached for this session. Please try again in a minute.' });
+  }
+
+  // 2. Session Quota Pre-checks
   if (session.maxFiles && session.uploadedCount >= session.maxFiles) {
     return res.status(403).json({ error: 'Upload limit reached for this session' });
   }
+  if (session.maxTotalBytes && (session.uploadedBytes || 0) >= session.maxTotalBytes) {
+    return res.status(403).json({ error: 'Session storage quota reached' });
+  }
 
-  quickDropUpload.array('files', 50)(req, res, (err) => {
+  // 3. Destination containment & Drive check
+  const drives = getMountedDrives();
+  const drive = drives.find(d => d.id === session.driveId);
+  if (!drive) return res.status(404).json({ error: 'Destination drive is disconnected' });
+
+  let destDir;
+  try {
+    destDir = safePath(drive.mount, session.folder);
+    verifySafeContainment(drive.mount, path.relative(drive.mount, destDir));
+  } catch (err) {
+    return res.status(400).json({ error: 'Invalid destination folder' });
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+
+  // 4. Content-Length quota & free disk space pre-check
+  const contentLength = parseInt(req.headers['content-length'] || '0', 10);
+  const remainingQuota = session.maxTotalBytes ? (session.maxTotalBytes - (session.uploadedBytes || 0)) : null;
+
+  if (contentLength > 0) {
+    if (remainingQuota !== null && contentLength > remainingQuota) {
+      return res.status(413).json({
+        error: `Upload size (${formatSize(contentLength)}) exceeds remaining session quota of ${formatSize(remainingQuota)}`
+      });
+    }
+    const freeBytes = getFreeDiskSpace(destDir);
+    const SAFETY_BUFFER = 50 * 1024 * 1024; // 50 MB safety margin
+    if (freeBytes !== null && (contentLength + SAFETY_BUFFER > freeBytes)) {
+      return res.status(507).json({
+        error: `Insufficient disk space. Needed: ${formatSize(contentLength)}, Available: ${formatSize(freeBytes)}`
+      });
+    }
+  }
+
+  // 5. Dynamic Multer instance configured for this session's limits
+  const maxSingleFile = session.maxFileBytes || (20 * 1024 * 1024 * 1024);
+  const allowedRemainingFiles = session.maxFiles ? Math.max(1, Math.min(50, session.maxFiles - session.uploadedCount)) : 50;
+
+  const storage = multer.diskStorage({
+    destination: (r, file, cb) => {
+      try {
+        const dest = safePath(drive.mount, session.folder);
+        verifySafeContainment(drive.mount, path.relative(drive.mount, dest));
+        fs.mkdirSync(dest, { recursive: true });
+        cb(null, dest);
+      } catch (err) {
+        cb(err);
+      }
+    },
+    filename: (r, file, cb) => {
+      try {
+        const dest = safePath(drive.mount, session.folder);
+        // Sanitize both / and \, null bytes, control chars, reduce to safe basename
+        const safeName = sanitizeFilename(file.originalname, 'upload');
+        // Verify output path remains strictly inside destination directory
+        verifySafeContainment(dest, safeName);
+
+        const parsedName = path.parse(safeName);
+        let finalName = safeName;
+        let target = path.join(dest, finalName);
+        let counter = 1;
+        while (fs.existsSync(target)) {
+          finalName = `${parsedName.name} (${counter})${parsedName.ext}`;
+          verifySafeContainment(dest, finalName);
+          target = path.join(dest, finalName);
+          counter++;
+        }
+        cb(null, finalName);
+      } catch (err) {
+        cb(err);
+      }
+    }
+  });
+
+  const uploadHandler = multer({
+    storage,
+    limits: {
+      fileSize: maxSingleFile,
+      files: allowedRemainingFiles
+    }
+  }).array('files', allowedRemainingFiles);
+
+  uploadHandler(req, res, (err) => {
     if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: `File exceeds maximum allowed size of ${formatSize(maxSingleFile)}` });
+      }
+      if (err.code === 'LIMIT_FILE_COUNT') {
+        return res.status(403).json({ error: `Too many files. Session limit is ${session.maxFiles}` });
+      }
       return res.status(400).json({ error: err.message });
     }
-    const uploadedList = (req.files || []).map(f => ({
-      name: f.originalname,
+
+    const uploadedFiles = req.files || [];
+    const batchBytes = uploadedFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+
+    // Post-write aggregate quota check
+    if (session.maxTotalBytes && ((session.uploadedBytes || 0) + batchBytes > session.maxTotalBytes)) {
+      for (const f of uploadedFiles) {
+        try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch (_) {}
+      }
+      return res.status(413).json({
+        error: `Upload batch (${formatSize(batchBytes)}) exceeds session storage quota of ${formatSize(session.maxTotalBytes)}`
+      });
+    }
+
+    // Verify written files are strictly inside destDir
+    for (const f of uploadedFiles) {
+      try {
+        verifySafeContainment(destDir, path.basename(f.path));
+      } catch (cErr) {
+        try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch (_) {}
+        return res.status(400).json({ error: 'File containment violation blocked: ' + cErr.message });
+      }
+    }
+
+    const uploadedList = uploadedFiles.map(f => ({
+      name: path.basename(f.path),
       size: formatSize(f.size),
       time: new Date().toLocaleTimeString()
     }));
 
-    session.uploadedCount += uploadedList.length;
+    session.uploadedCount = (session.uploadedCount || 0) + uploadedList.length;
+    session.uploadedBytes = (session.uploadedBytes || 0) + batchBytes;
     session.uploadedFiles.push(...uploadedList);
     saveQuickDrops();
 
     res.json({
       success: true,
       count: uploadedList.length,
-      files: uploadedList
+      files: uploadedList,
+      uploadedCount: session.uploadedCount,
+      uploadedBytes: session.uploadedBytes
     });
   });
 });
+
+module.exports = {
+  app,
+  server,
+  safePath,
+  verifySafeContainment,
+  sanitizeFilename,
+  isPrivateOrReservedIp,
+  validateUrlForSsrf,
+  startDownloadTask,
+  quickDropSessions,
+  remoteDownloads,
+  saveQuickDrops,
+  saveRemoteDownloads,
+  getFreeDiskSpace,
+  checkRateLimit,
+  cachedDrives,
+  getMountedDrives
+};
 
 
 

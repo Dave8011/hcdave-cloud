@@ -4,4 +4,6 @@ agent/node_modules/
 *.log
 .DS_Store
 agent/shares.json
+agent/quickdrops.json
+agent/remote_downloads.json
 agent/.env

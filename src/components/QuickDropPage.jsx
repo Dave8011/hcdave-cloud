@@ -78,6 +78,18 @@ export function QuickDropPage({ token, onGoHome }) {
     setUploadProgress(0);
     setError(null);
 
+    if (session?.maxFileBytes && selectedFiles.some(f => f.size > session.maxFileBytes)) {
+      setError(`One or more files exceed the max file size limit of ${formatSize(session.maxFileBytes)}`);
+      setUploading(false);
+      return;
+    }
+    const remainingQuota = session?.maxTotalBytes ? (session.maxTotalBytes - (session.uploadedBytes || 0)) : null;
+    if (remainingQuota !== null && totalBytes > remainingQuota) {
+      setError(`Selected files (${formatSize(totalBytes)}) exceed remaining session quota of ${formatSize(remainingQuota)}`);
+      setUploading(false);
+      return;
+    }
+
     try {
       const result = await StorageService.uploadQuickDropFiles(token, selectedFiles, (progress) => {
         setUploadProgress(progress.percent);
@@ -85,6 +97,11 @@ export function QuickDropPage({ token, onGoHome }) {
       setUploadSuccess(true);
       setUploadedFilesList(selectedFiles.map(f => ({ name: f.name, size: formatSize(f.size) })));
       setSelectedFiles([]);
+      setSession(prev => prev ? {
+        ...prev,
+        uploadedCount: result.uploadedCount ?? (prev.uploadedCount + selectedFiles.length),
+        uploadedBytes: result.uploadedBytes ?? ((prev.uploadedBytes || 0) + totalBytes)
+      } : prev);
     } catch (err) {
       setError(err.message || 'Upload failed. Please check network connection.');
     } finally {
@@ -213,6 +230,11 @@ export function QuickDropPage({ token, onGoHome }) {
           <span style={{ color: 'var(--text-3)' }}>/</span>
           <Folder size={15} color="var(--amber)" />
           <span style={{ color: 'var(--text-2)', fontFamily: 'monospace' }}>{session?.folder}</span>
+          {session?.maxTotalBytes && (
+            <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--text-3)' }}>
+              Quota: {formatSize(Math.max(0, session.maxTotalBytes - (session.uploadedBytes || 0)))}
+            </span>
+          )}
         </div>
 
         {/* Action Triggers: Camera + File Browse */}
