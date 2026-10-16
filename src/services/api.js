@@ -119,6 +119,38 @@ export class StorageService {
       return [];
     }
   }
+
+  // GET /api/search — global multi-drive search with GPS and location filters
+  static async searchAllDrives(params = {}) {
+    try {
+      const query = new URLSearchParams();
+      if (params.q) query.set('q', params.q);
+      if (params.driveId) query.set('driveId', params.driveId);
+      if (params.type && params.type !== 'all') query.set('type', params.type);
+      if (params.folder) query.set('folder', params.folder);
+      if (params.sort) query.set('sort', params.sort);
+      if (params.minSize) query.set('minSize', params.minSize);
+      if (params.maxSize) query.set('maxSize', params.maxSize);
+      if (params.modifiedAfter) query.set('modifiedAfter', params.modifiedAfter);
+      if (params.modifiedBefore) query.set('modifiedBefore', params.modifiedBefore);
+      if (params.limit) query.set('limit', params.limit);
+
+      const res = await fetch(`${this.getAgentUrl()}/api/search?${query.toString()}`, {
+        headers: this.headers()
+      });
+      if (res.status === 401 || res.status === 403) {
+        this.logout();
+        window.location.reload();
+        return { results: [], total: 0 };
+      }
+      if (!res.ok) throw new Error('Search failed');
+      return await res.json();
+    } catch (e) {
+      console.error('searchAllDrives error:', e);
+      return { results: [], total: 0, error: e.message };
+    }
+  }
+
   // POST /api/check-files — check if files already exist on the drive
   static async checkExistingFiles(driveId, files) {
     if (!driveId || !files || !files.length) return [];

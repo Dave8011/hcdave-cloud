@@ -7,6 +7,8 @@ import { FileExplorer }     from './components/FileExplorer';
 import { UploadModal }      from './components/UploadModal';
 import { NewFolderModal }   from './components/NewFolderModal';
 import { SettingsModal }    from './components/SettingsModal';
+import { GlobalSearchModal }  from './components/GlobalSearchModal';
+import { FilePreviewModal }   from './components/FilePreviewModal';
 import { SharePage }        from './components/SharePage';
 import { StorageService }   from './services/api';
 import { ErrorBoundary }    from './components/ErrorBoundary';
@@ -34,6 +36,22 @@ export default function App() {
   const [showSettings, setShowSettings]= useState(false);
   const [isSidebarOpen, setIsSidebarOpen]= useState(false);
   const [driveStats, setDriveStats]     = useState([]);
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const [targetFileName, setTargetFileName] = useState(null);
+  const [previewSearchFile, setPreviewSearchFile] = useState(null);
+
+  // Global keyboard shortcut: Ctrl+K / Cmd+K to toggle multi-drive search
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setShowGlobalSearch(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   /* Flash helper — show quick D then go somewhere */
   const flashTo = useCallback((target) => {
@@ -218,6 +236,28 @@ export default function App() {
   /* ── Main App ── */
   const activeDrive = drives.find(d => d.id === activeDriveId);
 
+  const handleOpenSearch = (initialQ = '') => {
+    setGlobalSearchQuery(typeof initialQ === 'string' ? initialQ : '');
+    setShowGlobalSearch(true);
+  };
+
+  const handleNavigateFromSearch = (targetDriveId, folderPath, filename) => {
+    if (targetDriveId) setActiveDriveId(targetDriveId);
+    setCurrentPath(folderPath || '/');
+    if (filename) {
+      setTargetFileName(filename);
+      setTimeout(() => setTargetFileName(null), 3500);
+    }
+  };
+
+  const handlePreviewFromSearch = (item) => {
+    setPreviewSearchFile({
+      ...item,
+      url: StorageService.getFileDownloadUrl(item.driveId, item.path),
+      streamUrl: item.type === 'video' ? StorageService.getStreamUrl(item.driveId, item.path) : null,
+    });
+  };
+
   return (
     <div className="app-container">
       {/* Mobile Sidebar Overlay */}
@@ -246,6 +286,7 @@ export default function App() {
             setShowSettings('cache');
           } catch (e) { alert('Cache error: ' + e.message); }
         }}
+        onOpenSearch={() => handleOpenSearch('')}
         onOpenDashboard={() => setShowSettings('dashboard')}
         onOpenBackup={() => setShowSettings('backup')}
         onOpenTrash={() => setShowSettings('trash')}
@@ -256,6 +297,7 @@ export default function App() {
         <TopBar
           search={search}
           setSearch={setSearch}
+          onOpenSearch={handleOpenSearch}
           onMenuToggle={() => setIsSidebarOpen(!isSidebarOpen)}
           onUpload={() => setShowUpload(true)}
           onNewFolder={() => setShowNewFolder(true)}
@@ -272,6 +314,7 @@ export default function App() {
           currentPath={currentPath}
           setCurrentPath={(p) => { setCurrentPath(p); setSearch(''); }}
           onRefresh={loadFiles}
+          targetFileName={targetFileName}
         />
       </main>
 
@@ -300,6 +343,31 @@ export default function App() {
             onClose={() => setShowSettings(false)}
             onSave={() => { loadDrives(); loadFiles(); }}
             drives={drives}
+          />
+        </ErrorBoundary>
+      )}
+
+      {showGlobalSearch && (
+        <ErrorBoundary>
+          <GlobalSearchModal
+            isOpen={showGlobalSearch}
+            onClose={() => setShowGlobalSearch(false)}
+            drives={drives}
+            initialQuery={globalSearchQuery}
+            onNavigateToFolder={handleNavigateFromSearch}
+            onPreviewFile={handlePreviewFromSearch}
+          />
+        </ErrorBoundary>
+      )}
+
+      {previewSearchFile && (
+        <ErrorBoundary>
+          <FilePreviewModal
+            file={previewSearchFile}
+            files={[previewSearchFile]}
+            onClose={() => setPreviewSearchFile(null)}
+            onDelete={() => { setPreviewSearchFile(null); loadFiles(); }}
+            activeDrive={drives.find(d => d.id === previewSearchFile.driveId) || activeDrive}
           />
         </ErrorBoundary>
       )}

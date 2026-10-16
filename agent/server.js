@@ -732,6 +732,315 @@ app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
   }
 });
 
+/* ─────────────────────────────────────────────
+   GLOBAL MULTI-DRIVE SEARCH WITH GPS METADATA
+   ───────────────────────────────────────────── */
+function parseGpsFromExifBuffer(buf) {
+  if (!buf || buf.length < 14) return null;
+  let tiffStart = 0;
+  if (buf.slice(0, 4).toString() === 'Exif') {
+    tiffStart = 6;
+  }
+  if (tiffStart >= buf.length - 8) return null;
+  const isLittle = buf[tiffStart] === 0x49 && buf[tiffStart + 1] === 0x49;
+  const isBig = buf[tiffStart] === 0x4d && buf[tiffStart + 1] === 0x4d;
+  if (!isLittle && !isBig) return null;
+
+  function readUint16(o) {
+    if (tiffStart + o + 2 > buf.length) return 0;
+    return isLittle ? buf.readUInt16LE(tiffStart + o) : buf.readUInt16BE(tiffStart + o);
+  }
+  function readUint32(o) {
+    if (tiffStart + o + 4 > buf.length) return 0;
+    return isLittle ? buf.readUInt32LE(tiffStart + o) : buf.readUInt32BE(tiffStart + o);
+  }
+
+  const ifd0Offset = readUint32(4);
+  if (ifd0Offset + 2 > buf.length - tiffStart) return null;
+  const numEntries = readUint16(ifd0Offset);
+  let gpsOffset = null;
+  for (let i = 0; i < numEntries; i++) {
+    const entryOffset = ifd0Offset + 2 + i * 12;
+    if (entryOffset + 12 > buf.length - tiffStart) break;
+    const tag = readUint16(entryOffset);
+    if (tag === 0x8825) { // GPSInfo IFD pointer
+      gpsOffset = readUint32(entryOffset + 8);
+      break;
+    }
+  }
+  if (!gpsOffset || gpsOffset + 2 > buf.length - tiffStart) return null;
+
+  const numGpsEntries = readUint16(gpsOffset);
+  let latRef, latDeg, lonRef, lonDeg;
+
+  function readRational(o) {
+    if (tiffStart + o + 8 > buf.length) return 0;
+    const num = readUint32(o);
+    const den = readUint32(o + 4);
+    return den ? num / den : 0;
+  }
+
+  for (let i = 0; i < numGpsEntries; i++) {
+    const entryOffset = gpsOffset + 2 + i * 12;
+    if (entryOffset + 12 > buf.length - tiffStart) break;
+    const tag = readUint16(entryOffset);
+    const valOffset = readUint32(entryOffset + 8);
+
+    if (tag === 1) { // LatRef
+      latRef = String.fromCharCode(buf[tiffStart + entryOffset + 8]);
+    } else if (tag === 2) { // Lat
+      if (valOffset + 24 <= buf.length - tiffStart) {
+        const d = readRational(valOffset);
+        const m = readRational(valOffset + 8);
+        const s = readRational(valOffset + 16);
+        latDeg = d + m / 60 + s / 3600;
+      }
+    } else if (tag === 3) { // LonRef
+      lonRef = String.fromCharCode(buf[tiffStart + entryOffset + 8]);
+    } else if (tag === 4) { // Lon
+      if (valOffset + 24 <= buf.length - tiffStart) {
+        const d = readRational(valOffset);
+        const m = readRational(valOffset + 8);
+        const s = readRational(valOffset + 16);
+        lonDeg = d + m / 60 + s / 3600;
+      }
+    }
+  }
+
+  if (latDeg !== undefined && lonDeg !== undefined && !isNaN(latDeg) && !isNaN(lonDeg)) {
+    let lat = latDeg * (latRef === 'S' ? -1 : 1);
+    let lng = lonDeg * (lonRef === 'W' ? -1 : 1);
+    if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && (lat !== 0 || lng !== 0)) {
+      return {
+        lat: Number(lat.toFixed(6)),
+        lng: Number(lng.toFixed(6)),
+        coords: `${Math.abs(lat).toFixed(4)}° ${lat >= 0 ? 'N' : 'S'}, ${Math.abs(lng).toFixed(4)}° ${lng >= 0 ? 'E' : 'W'}`,
+        mapUrl: `https://www.google.com/maps?q=${lat.toFixed(6)},${lng.toFixed(6)}`
+      };
+    }
+  }
+  return null;
+}
+
+async function extractGpsFromImage(filePath) {
+  try {
+    const meta = await sharp(filePath).metadata();
+    if (meta && meta.exif) {
+      return parseGpsFromExifBuffer(meta.exif);
+    }
+  } catch (_) {}
+  return null;
+}
+
+const SEARCH_IGNORED_DIRS = new Set([
+  '.hcdave-backups',
+  '.hcdave-cache',
+  '.recycle_bin',
+  '.fseventsd',
+  '.Spotlight-V100',
+  '.Trashes',
+  'System Volume Information',
+  '$RECYCLE.BIN',
+  '.git',
+  'node_modules',
+  '.thumbnails'
+]);
+
+async function searchDriveRecursive(drive, options) {
+  const matches = [];
+  const queue = ['/'];
+  let dirsVisited = 0;
+  const MAX_DIRS = 3000;
+  const MAX_MATCHES_PER_DRIVE = 300;
+
+  const qLower = (options.q || '').trim().toLowerCase();
+  const folderFilter = (options.folder || '').trim().toLowerCase();
+
+  while (queue.length > 0 && dirsVisited < MAX_DIRS && matches.length < MAX_MATCHES_PER_DRIVE) {
+    const relDir = queue.shift();
+    dirsVisited++;
+
+    let fullDir;
+    try { fullDir = safePath(drive.mount, relDir); } catch (_) { continue; }
+    if (!fs.existsSync(fullDir)) continue;
+
+    let entries;
+    try {
+      entries = await fs.promises.readdir(fullDir, { withFileTypes: true });
+    } catch (_) { continue; }
+
+    for (const entry of entries) {
+      const name = entry.name;
+      if (SEARCH_IGNORED_DIRS.has(name) || name.startsWith('._')) continue;
+
+      const isDir = entry.isDirectory();
+      const relPath = path.posix.join(relDir, name);
+      const parentFolder = relDir;
+
+      if (isDir) {
+        const depth = relPath.split('/').filter(Boolean).length;
+        if (depth < 9) queue.push(relPath);
+      }
+
+      if (folderFilter && !relPath.toLowerCase().includes(folderFilter)) {
+        continue;
+      }
+
+      const fileType = getFileType(name, isDir);
+      if (options.type && options.type !== 'all') {
+        if (options.type === 'folder') {
+          if (!isDir) continue;
+        } else {
+          if (isDir || fileType !== options.type) continue;
+        }
+      }
+
+      let score = 0;
+      if (qLower) {
+        const nameLower = name.toLowerCase();
+        const relPathLower = relPath.toLowerCase();
+        const extIdx = nameLower.lastIndexOf('.');
+        const nameNoExt = extIdx > 0 ? nameLower.substring(0, extIdx) : nameLower;
+
+        if (nameLower === qLower || nameNoExt === qLower) {
+          score = 100;
+        } else if (nameLower.startsWith(qLower)) {
+          score = 80;
+        } else if (nameLower.includes(qLower)) {
+          score = 60;
+        } else if (relPathLower.includes(qLower)) {
+          score = 40;
+        } else {
+          continue;
+        }
+      } else {
+        score = 50;
+      }
+
+      const fullPath = path.join(fullDir, name);
+      let st;
+      try {
+        st = await fs.promises.stat(fullPath);
+      } catch (_) { continue; }
+
+      if (!isDir) {
+        if (options.minSize && st.size < options.minSize) continue;
+        if (options.maxSize && st.size > options.maxSize) continue;
+      }
+
+      if (options.modifiedAfter && st.mtimeMs < options.modifiedAfter) continue;
+      if (options.modifiedBefore && st.mtimeMs > options.modifiedBefore) continue;
+
+      let gps = null;
+      if (fileType === 'image' && !isDir) {
+        try {
+          gps = await extractGpsFromImage(fullPath);
+        } catch (_) {}
+      }
+
+      matches.push({
+        id: `${drive.id}:${relPath}`,
+        name,
+        path: relPath,
+        folder: parentFolder,
+        driveId: drive.id,
+        driveName: drive.name,
+        driveRole: drive.role || '',
+        isDriveOnline: true,
+        type: fileType,
+        isDir,
+        size: isDir ? 'Folder' : formatSize(st.size),
+        rawSize: isDir ? 0 : st.size,
+        modified: st.mtime.toISOString().split('T')[0],
+        mtimeMs: st.mtimeMs,
+        score,
+        gps
+      });
+
+      if (matches.length >= MAX_MATCHES_PER_DRIVE) break;
+    }
+  }
+
+  return matches;
+}
+
+// GET /api/search — Global multi-drive search with GPS and location awareness
+app.get('/api/search', rateLimitAuth, auth, async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    const driveFilter = (req.query.driveId || 'all').trim();
+    const typeFilter = (req.query.type || 'all').trim();
+    const folderFilter = (req.query.folder || '').trim();
+    const sort = req.query.sort || 'relevance';
+    const limit = Math.min(parseInt(req.query.limit, 10) || 150, 300);
+
+    let minSize = req.query.minSize ? parseInt(req.query.minSize, 10) : null;
+    let maxSize = req.query.maxSize ? parseInt(req.query.maxSize, 10) : null;
+    let modifiedAfter = req.query.modifiedAfter ? new Date(req.query.modifiedAfter).getTime() : null;
+    let modifiedBefore = req.query.modifiedBefore ? new Date(req.query.modifiedBefore).getTime() : null;
+
+    const mountedDrives = getMountedDrives();
+
+    // Check if the requested drive is in disconnected drives
+    if (driveFilter !== 'all') {
+      const isMounted = mountedDrives.some(d => d.id === driveFilter);
+      if (!isMounted) {
+        const disco = disconnectedDrives.find(d => d.id === driveFilter);
+        return res.json({
+          results: [],
+          total: 0,
+          isDriveOffline: true,
+          offlineDriveName: disco?.name || 'Selected Drive',
+          searchedDrives: [],
+          disconnectedDrives: disconnectedDrives.map(d => ({ id: d.id, name: d.name, disconnectedAt: d.disconnectedAt }))
+        });
+      }
+    }
+
+    const targetDrives = driveFilter === 'all'
+      ? mountedDrives
+      : mountedDrives.filter(d => d.id === driveFilter);
+
+    const searchOptions = {
+      q,
+      type: typeFilter,
+      folder: folderFilter,
+      minSize,
+      maxSize,
+      modifiedAfter,
+      modifiedBefore
+    };
+
+    const driveResults = await Promise.all(
+      targetDrives.map(drive => searchDriveRecursive(drive, searchOptions))
+    );
+
+    const allMatches = driveResults.flat();
+
+    allMatches.sort((a, b) => {
+      if (sort === 'relevance') {
+        if (b.score !== a.score) return b.score - a.score;
+        return b.mtimeMs - a.mtimeMs;
+      }
+      if (sort === 'newest') return b.mtimeMs - a.mtimeMs;
+      if (sort === 'oldest') return a.mtimeMs - b.mtimeMs;
+      if (sort === 'largest') return b.rawSize - a.rawSize;
+      if (sort === 'name') return a.name.localeCompare(b.name);
+      return 0;
+    });
+
+    res.json({
+      results: allMatches.slice(0, limit),
+      total: allMatches.length,
+      searchedDrives: targetDrives.map(d => ({ id: d.id, name: d.name, role: d.role })),
+      disconnectedDrives: disconnectedDrives.map(d => ({ id: d.id, name: d.name, disconnectedAt: d.disconnectedAt }))
+    });
+  } catch (err) {
+    console.error('Search error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET|HEAD /api/download — RFC 7233-compliant bounded range streaming
 // Cloudflare-safe: no-transform, no gzip, always unencoded 206 responses
 const MAX_STREAM_CHUNK = 16 * 1024 * 1024; // 16 MB cap per response

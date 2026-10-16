@@ -1,22 +1,62 @@
 import React from 'react';
 import { Search, UploadCloud, Settings, LogOut, Menu, Camera } from 'lucide-react';
 
-export function TopBar({ search, setSearch, onUpload, onNewFolder, onSettings, onLogout, onMenuToggle, onScan }) {
+export function TopBar({
+  search,
+  setSearch,
+  onUpload,
+  onNewFolder,
+  onSettings,
+  onLogout,
+  onMenuToggle,
+  onScan,
+  onOpenSearch
+}) {
   return (
     <div className="top-bar">
       <button className="btn-icon mobile-menu-btn" onClick={onMenuToggle} style={{ display: 'none' }}>
         <Menu size={20} />
       </button>
 
-      <div className="search-wrap">
+      <div
+        className="search-wrap"
+        onClick={() => onOpenSearch && onOpenSearch(search)}
+        style={{ cursor: 'pointer', position: 'relative' }}
+        title="Search across all connected drives (Ctrl+K)"
+      >
         <Search size={16} className="search-icon-pos" />
         <input
           type="search"
           className="search-input"
-          placeholder="Search files and folders..."
+          placeholder="Search all drives (Ctrl+K)..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            if (onOpenSearch) onOpenSearch(e.target.value);
+          }}
+          onFocus={() => {
+            if (onOpenSearch) onOpenSearch(search);
+          }}
         />
+        <span
+          className="hide-mobile"
+          style={{
+            position: 'absolute',
+            right: 12,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            fontSize: '0.68rem',
+            padding: '2px 6px',
+            borderRadius: 4,
+            background: 'rgba(255,255,255,0.08)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            color: 'var(--text-3)',
+            fontWeight: 600,
+            pointerEvents: 'none'
+          }}
+        >
+          Ctrl+K
+        </span>
       </div>
 
       <div className="top-actions">

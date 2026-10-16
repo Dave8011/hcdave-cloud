@@ -28,13 +28,20 @@ function formatSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, drives = [], currentPath, setCurrentPath, onRefresh }) {
+export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, drives = [], currentPath, setCurrentPath, onRefresh, targetFileName }) {
   const [typeFilter, setTypeFilter] = useState('all');
   
   const files = React.useMemo(() => {
     if (typeFilter === 'all') return rawFiles;
     return rawFiles.filter(f => f.type === typeFilter);
   }, [rawFiles, typeFilter]);
+
+  const targetCardRef = useRef(null);
+  useEffect(() => {
+    if (targetFileName && targetCardRef.current) {
+      targetCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [targetFileName, files]);
 
   const [view, setView] = useState('grid');
   const [shareFiles, setShareFiles] = useState(null); // array of file objects or single file object
@@ -276,11 +283,20 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, dri
           {displayFiles.map((file) => {
             const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;
             const isSelected = selectedFiles.has(file.path);
+            const isTarget = file.name === targetFileName;
             return (
               <div
                 key={file.id || file.path}
-                className={`file-card ${isSelected ? 'selected' : ''}`}
-                style={{ position: 'relative', userSelect: 'none', zIndex: activeMenuId === file.path ? 100 : undefined }}
+                ref={isTarget ? targetCardRef : null}
+                className={`file-card ${isSelected ? 'selected' : ''} ${isTarget ? 'target-highlighted' : ''}`}
+                style={{
+                  position: 'relative',
+                  userSelect: 'none',
+                  zIndex: activeMenuId === file.path ? 100 : undefined,
+                  borderColor: isTarget ? 'var(--cyan)' : undefined,
+                  boxShadow: isTarget ? '0 0 16px rgba(34, 211, 238, 0.4)' : undefined,
+                  transition: 'all 0.3s ease'
+                }}
                 onClick={() => handleCardClick(file)}
                 onMouseDown={() => onPressStart(file)}
                 onMouseUp={onPressEnd}
@@ -360,11 +376,22 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, dri
           {displayFiles.map((file, i) => {
             const { cls, Icon } = TYPE_MAP[file.type] || TYPE_MAP.document;
             const isSelected = selectedFiles.has(file.path);
+            const isTarget = file.name === targetFileName;
             return (
               <div
                 key={file.id || file.path}
-                className={`list-row ${isSelected ? 'selected' : ''} ${selectMode ? 'is-select-mode' : ''}`}
-                style={{ animationDelay: `${i * 0.04}s`, userSelect: 'none', zIndex: activeMenuId === file.path ? 100 : undefined, position: 'relative' }}
+                ref={isTarget ? targetCardRef : null}
+                className={`list-row ${isSelected ? 'selected' : ''} ${selectMode ? 'is-select-mode' : ''} ${isTarget ? 'target-highlighted' : ''}`}
+                style={{
+                  animationDelay: `${i * 0.04}s`,
+                  userSelect: 'none',
+                  zIndex: activeMenuId === file.path ? 100 : undefined,
+                  position: 'relative',
+                  borderColor: isTarget ? 'var(--cyan)' : undefined,
+                  background: isTarget ? 'rgba(34, 211, 238, 0.1)' : undefined,
+                  boxShadow: isTarget ? '0 0 12px rgba(34, 211, 238, 0.3)' : undefined,
+                  transition: 'all 0.3s ease'
+                }}
                 onClick={() => handleCardClick(file)}
                 onMouseDown={() => onPressStart(file)}
                 onMouseUp={onPressEnd}
