@@ -17,6 +17,8 @@ export function QuickDropModal({
   const [selectedDriveId, setSelectedDriveId] = useState(activeDriveId || (drives[0]?.id || ''));
   const [folder, setFolder]                 = useState(currentPath || '/');
   const [expiryMinutes, setExpiryMinutes]   = useState(60);
+  const [maxTotalBytes, setMaxTotalBytes]   = useState(50 * 1024 * 1024 * 1024); // 50 GB default
+  const [maxFileBytes, setMaxFileBytes]     = useState(20 * 1024 * 1024 * 1024); // 20 GB default
   const [session, setSession]               = useState(null);
   const [isCreating, setIsCreating]         = useState(false);
   const [errorMsg, setErrorMsg]             = useState('');
@@ -31,14 +33,16 @@ export function QuickDropModal({
   }, [activeDriveId, currentPath, isOpen]);
 
   // Create session automatically when modal opens if not already created
-  const createSession = async () => {
+  const createSession = async (customTotal, customFile) => {
     setIsCreating(true);
     setErrorMsg('');
     try {
       const res = await StorageService.createQuickDrop({
         driveId: selectedDriveId,
         folder: folder.trim() || '/',
-        expiryMinutes: parseInt(expiryMinutes, 10)
+        expiryMinutes: parseInt(expiryMinutes, 10),
+        maxFileBytes: customFile !== undefined ? Number(customFile) : Number(maxFileBytes),
+        maxTotalBytes: customTotal !== undefined ? Number(customTotal) : Number(maxTotalBytes)
       });
       setSession(res);
       setStatus({ uploadedCount: 0, uploadedFiles: [] });
@@ -172,9 +176,35 @@ export function QuickDropModal({
               </span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', color: 'var(--text-3)' }}>
-              <Clock size={13} />
-              <span>Expires in {expiryMinutes}m</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: '0.75rem', color: 'var(--text-3)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Clock size={13} />
+                <span>Expires: {expiryMinutes}m</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span>Safe Quota:</span>
+                <select
+                  value={maxTotalBytes}
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    setMaxTotalBytes(val);
+                    createSession(val, maxFileBytes);
+                  }}
+                  style={{
+                    background: 'rgba(0,0,0,0.35)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    color: 'var(--text-1)',
+                    borderRadius: 4,
+                    padding: '2px 4px',
+                    fontSize: '0.72rem'
+                  }}
+                >
+                  <option value={1024 * 1024 * 1024}>1 GB</option>
+                  <option value={5 * 1024 * 1024 * 1024}>5 GB</option>
+                  <option value={20 * 1024 * 1024 * 1024}>20 GB</option>
+                  <option value={50 * 1024 * 1024 * 1024}>50 GB</option>
+                </select>
+              </div>
             </div>
           </div>
 

@@ -154,8 +154,8 @@ function auth(req, res, next) {
    ───────────────────────────────────────────── */
 function safePath(baseDir, userPath) {
   const resolvedBase = path.resolve(baseDir);
-  // Remove leading slashes/backslashes
-  const cleanPath = (userPath || '/').replace(/^(\/|\\)+/, '');
+  // Remove null bytes, control chars, and leading slashes/backslashes
+  const cleanPath = (userPath || '/').replace(/[\x00-\x1F\x7F]/g, '').replace(/^(\/|\\)+/, '');
   const resolved = path.resolve(resolvedBase, cleanPath);
   const rel = path.relative(resolvedBase, resolved);
   if (rel.startsWith('..') || path.isAbsolute(rel) || (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + path.sep))) {
@@ -188,7 +188,7 @@ function sanitizeFilename(rawName, fallback = 'upload') {
   const segments = name.split(/[/\\]+/).filter(Boolean);
   let base = segments.length > 0 ? segments[segments.length - 1] : '';
 
-  // Remove any leading dots
+  // Remove any leading dots (prevents hidden/dot files)
   base = base.replace(/^\.+/, '');
 
   // Strip characters unsafe on Windows / Linux / macOS
@@ -200,15 +200,26 @@ function sanitizeFilename(rawName, fallback = 'upload') {
   // Path basename enforcement
   base = path.basename(base);
 
+  // Block Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+  const stem = base.replace(/\.[^/.]*$/, '');
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem)) {
+    base = '_' + base;
+  }
+
   if (!base || base === '.' || base === '..' || base.trim() === '') {
     base = fallback;
   }
 
-  // Truncate to max 255 chars, keeping extension
-  if (base.length > 255) {
+  // Truncate to max 255 BYTES (Linux ext4/xfs limit is 255 bytes, NOT characters)
+  if (Buffer.byteLength(base, 'utf8') > 255) {
     const ext = path.extname(base);
-    const stem = path.basename(base, ext);
-    base = stem.slice(0, Math.max(1, 255 - ext.length)) + ext;
+    const extBytes = Buffer.byteLength(ext, 'utf8');
+    const maxStemBytes = Math.max(1, 255 - extBytes);
+    let s = path.basename(base, ext);
+    while (Buffer.byteLength(s, 'utf8') > maxStemBytes && s.length > 0) {
+      s = s.slice(0, -1);
+    }
+    base = s + ext;
   }
 
   return base;
@@ -3683,19 +3694,20 @@ function matchIpv6Cidr(ipBig, baseBig, prefix) {
 const IPV6_BLOCKED_RANGES = [
   { cidr: '::/128',          base: parseIpv6('::'),          prefix: 128 },
   { cidr: '::1/128',         base: parseIpv6('::1'),         prefix: 128 },
-  { cidr: '::ffff:0:0/96',   base: parseIpv6('::ffff:0:0'),   prefix: 96 },
-  { cidr: '64:ff9b::/96',    base: parseIpv6('64:ff9b::'),    prefix: 96 },
-  { cidr: '100::/64',        base: parseIpv6('100::'),        prefix: 64 },
-  { cidr: '2001:db8::/32',   base: parseIpv6('2001:db8::'),   prefix: 32 },
-  { cidr: '2002::/16',       base: parseIpv6('2002::'),       prefix: 16 },
-  { cidr: 'fc00::/7',        base: parseIpv6('fc00::'),        prefix: 7 },
-  { cidr: 'fe80::/10',       base: parseIpv6('fe80::'),       prefix: 10 },
-  { cidr: 'ff00::/8',        base: parseIpv6('ff00::'),        prefix: 8 }
+  { cidr: '::/96',           base: parseIpv6('::'),          prefix: 96 },   // IPv4-compatible (RFC 4291)
+  { cidr: '::ffff:0:0/96',   base: parseIpv6('::ffff:0:0'),   prefix: 96 },   // IPv4-mapped (RFC 4291)
+  { cidr: '64:ff9b::/96',    base: parseIpv6('64:ff9b::'),    prefix: 96 },   // NAT64 Well-Known (RFC 6052)
+  { cidr: '100::/64',        base: parseIpv6('100::'),        prefix: 64 },   // Discard prefix (RFC 6666)
+  { cidr: '2001:db8::/32',   base: parseIpv6('2001:db8::'),   prefix: 32 },   // Documentation (RFC 3849)
+  { cidr: '2002::/16',       base: parseIpv6('2002::'),       prefix: 16 },   // 6to4 (RFC 3056)
+  { cidr: 'fc00::/7',        base: parseIpv6('fc00::'),        prefix: 7 },    // Unique Local (RFC 4193)
+  { cidr: 'fe80::/10',       base: parseIpv6('fe80::'),       prefix: 10 },   // Link-local (RFC 4291)
+  { cidr: 'ff00::/8',        base: parseIpv6('ff00::'),        prefix: 8 }     // Multicast (RFC 4291)
 ];
 
 function isPrivateOrReservedIp(ip) {
   if (!ip || typeof ip !== 'string') return true;
-  const trimmed = ip.trim();
+  const trimmed = ip.trim().replace(/^\[|\]$/g, '');
   if (trimmed === 'localhost') return true;
 
   const v4Int = parseIpv4(trimmed);
@@ -3711,10 +3723,49 @@ function isPrivateOrReservedIp(ip) {
     for (const r of IPV6_BLOCKED_RANGES) {
       if (matchIpv6Cidr(v6Big, r.base, r.prefix)) return true;
     }
+    // Also inspect any embedded IPv4 addresses (e.g. ::127.0.0.1, ::ffff:192.168.1.1, etc.)
+    const v4match = trimmed.match(/:(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4match) {
+      const embeddedV4Int = parseIpv4(v4match[1]);
+      if (embeddedV4Int !== null) {
+        for (const r of IPV4_BLOCKED_RANGES) {
+          if (matchIpv4Cidr(embeddedV4Int, r.base, r.prefix)) return true;
+        }
+      }
+    }
     return false;
   }
 
   return true;
+}
+
+function parseContentDispositionFilename(header) {
+  if (!header || typeof header !== 'string') return null;
+
+  // RFC 6266 / RFC 5987: filename* takes precedence over filename
+  // Format: filename*=[charset]'[lang]'encoded-value
+  const fnStarMatch = header.match(/filename\*\s*=\s*([^\'\s]+)\'([^\']*)\'([^;\s]+)/i);
+  if (fnStarMatch) {
+    try {
+      const decoded = decodeURIComponent(fnStarMatch[3].trim());
+      if (decoded) return decoded;
+    } catch (_) {}
+  }
+
+  // Quoted filename: filename="..." or filename='...'
+  const quotedMatch = header.match(/filename\s*=\s*(['\"])((?:(?!\1)[^\\]|\\.)*)\1/i);
+  if (quotedMatch) {
+    const unescaped = quotedMatch[2].replace(/\\(.)/g, '$1').trim();
+    if (unescaped) return unescaped;
+  }
+
+  // Unquoted filename: filename=value
+  const unquotedMatch = header.match(/filename\s*=\s*([^;\s]+)/i);
+  if (unquotedMatch) {
+    return unquotedMatch[1].replace(/^["']|["']$/g, '').trim();
+  }
+
+  return null;
 }
 
 async function validateUrlForSsrf(targetUrl) {
@@ -3728,21 +3779,35 @@ async function validateUrlForSsrf(targetUrl) {
     throw new Error('Only HTTP and HTTPS URLs are allowed');
   }
   const hostname = parsed.hostname;
-  if (!hostname || hostname === 'localhost' || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
+  if (!hostname) {
+    throw new Error('Invalid URL hostname');
+  }
+
+  // Strip brackets from IPv6 hostnames
+  const cleanHost = hostname.replace(/^\[|\]$/g, '');
+
+  if (cleanHost === 'localhost' || cleanHost.endsWith('.local') || cleanHost.endsWith('.internal')) {
     throw new Error('Access to local/internal network hostnames is blocked for security');
   }
 
-  if (net.isIP(hostname)) {
-    if (isPrivateOrReservedIp(hostname)) {
-      throw new Error(`Access to private/internal IP address (${hostname}) is blocked for security`);
+  const ipVer = net.isIP(cleanHost);
+  if (ipVer !== 0) {
+    if (isPrivateOrReservedIp(cleanHost)) {
+      throw new Error(`Access to private/internal IP address (${cleanHost}) is blocked for security`);
     }
+    return {
+      parsedUrl: parsed,
+      url: parsed.toString(),
+      pinnedIp: cleanHost,
+      pinnedFamily: ipVer
+    };
   }
 
   let records;
   try {
-    records = await dnsPromises.lookup(hostname, { all: true });
+    records = await dnsPromises.lookup(cleanHost, { all: true });
     if (!records || records.length === 0) {
-      throw new Error(`DNS resolution failed for hostname "${hostname}": No records found`);
+      throw new Error(`DNS resolution failed for hostname "${cleanHost}": No records found`);
     }
     for (const rec of records) {
       if (isPrivateOrReservedIp(rec.address)) {
@@ -3751,7 +3816,7 @@ async function validateUrlForSsrf(targetUrl) {
     }
   } catch (err) {
     if (err.message.includes('blocked for security')) throw err;
-    throw new Error(`DNS resolution failed for hostname "${hostname}": ${err.message}`);
+    throw new Error(`DNS resolution failed for hostname "${cleanHost}": ${err.message}`);
   }
 
   const pinnedRecord = records[0];
@@ -3816,14 +3881,18 @@ async function startDownloadTask(task) {
     }
   };
 
+  const cleanHostname = parsed.hostname.replace(/^\[|\]$/g, '');
+  const isHostIp = net.isIP(cleanHostname) !== 0;
+
   const reqOptions = {
     headers,
     lookup: customLookup,
-    servername: parsed.hostname
+    servername: isHostIp ? undefined : cleanHostname
   };
 
   const req = client.get(task.url, reqOptions, (res) => {
     if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+      try { res.resume(); } catch (_) {}
       task.redirectCount = (task.redirectCount || 0) + 1;
       if (task.redirectCount > 5) {
         task.status = 'failed';
@@ -3871,23 +3940,35 @@ async function startDownloadTask(task) {
     // Response filename handling via Content-Disposition
     const cd = res.headers['content-disposition'];
     if (cd) {
-      const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i);
-      if (m && m[1]) {
-        let rawCdName = m[1].trim();
-        try { rawCdName = decodeURIComponent(rawCdName); } catch (_) {}
+      const rawCdName = parseContentDispositionFilename(cd);
+      if (rawCdName) {
         const safeCdName = sanitizeFilename(rawCdName, task.filename || 'download');
         try {
           verifySafeContainment(task.destDir, safeCdName);
-          const newTarget = path.join(task.destDir, safeCdName);
+
+          let candidateName = safeCdName;
+          const parsedCd = path.parse(safeCdName);
+          let c = 1;
+          while (
+            (fs.existsSync(path.join(task.destDir, candidateName)) && path.join(task.destDir, candidateName) !== task.targetFile) ||
+            (task.partFile !== path.join(task.destDir, `${candidateName}.part`) && fs.existsSync(path.join(task.destDir, `${candidateName}.part`)))
+          ) {
+            candidateName = `${parsedCd.name} (${c})${parsedCd.ext}`;
+            verifySafeContainment(task.destDir, candidateName);
+            c++;
+          }
+
+          const newTarget = path.join(task.destDir, candidateName);
           const newPart = `${newTarget}.part`;
-          verifySafeContainment(task.destDir, path.basename(newPart));
+          verifySafeContainment(task.destDir, newTarget);
+          verifySafeContainment(task.destDir, newPart);
 
           if (task.partFile && task.partFile !== newPart && fs.existsSync(task.partFile)) {
             try {
               fs.renameSync(task.partFile, newPart);
             } catch (_) {}
           }
-          task.filename = safeCdName;
+          task.filename = candidateName;
           task.targetFile = newTarget;
           task.partFile = newPart;
         } catch (containErr) {
@@ -3898,7 +3979,7 @@ async function startDownloadTask(task) {
 
     // Guarantee containment of partFile before creating write stream
     try {
-      verifySafeContainment(task.destDir, path.basename(task.partFile));
+      verifySafeContainment(task.destDir, task.partFile);
     } catch (partErr) {
       task.status = 'failed';
       task.error = 'Destination containment failure: ' + partErr.message;
@@ -3907,6 +3988,7 @@ async function startDownloadTask(task) {
     }
 
     const writeStream = fs.createWriteStream(task.partFile, { flags: isPartial ? 'a' : 'w' });
+    activeDownloadReqs.set(task.id, { req, task, writeStream });
 
     res.on('data', (chunk) => {
       task.downloadedBytes += chunk.length;
@@ -3935,7 +4017,7 @@ async function startDownloadTask(task) {
         if (task.status !== 'downloading') return;
 
         try {
-          verifySafeContainment(task.destDir, path.basename(task.partFile));
+          verifySafeContainment(task.destDir, task.partFile);
 
           let finalTarget = task.targetFile;
           if (fs.existsSync(finalTarget)) {
@@ -3948,7 +4030,7 @@ async function startDownloadTask(task) {
               counter++;
             }
           }
-          verifySafeContainment(task.destDir, path.basename(finalTarget));
+          verifySafeContainment(task.destDir, finalTarget);
           task.targetFile = finalTarget;
           task.filename = path.basename(finalTarget);
 
@@ -4112,8 +4194,9 @@ app.post('/api/remote-downloads/:id/pause', rateLimitAuth, auth, (req, res) => {
   if (!task) return res.status(404).json({ error: 'Download task not found' });
 
   const active = activeDownloadReqs.get(task.id);
-  if (active && active.req) {
-    try { active.req.destroy(); } catch (_) {}
+  if (active) {
+    if (active.req) { try { active.req.destroy(); } catch (_) {} }
+    if (active.writeStream) { try { active.writeStream.close(); } catch (_) {} }
     activeDownloadReqs.delete(task.id);
   }
 
@@ -4147,8 +4230,9 @@ app.delete('/api/remote-downloads/:id', rateLimitAuth, auth, (req, res) => {
 
   const task = remoteDownloads[idx];
   const active = activeDownloadReqs.get(task.id);
-  if (active && active.req) {
-    try { active.req.destroy(); } catch (_) {}
+  if (active) {
+    if (active.req) { try { active.req.destroy(); } catch (_) {} }
+    if (active.writeStream) { try { active.writeStream.close(); } catch (_) {} }
     activeDownloadReqs.delete(task.id);
   }
 
@@ -4378,7 +4462,8 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
 
   // 4. Content-Length quota & free disk space pre-check
   const contentLength = parseInt(req.headers['content-length'] || '0', 10);
-  const remainingQuota = session.maxTotalBytes ? (session.maxTotalBytes - (session.uploadedBytes || 0)) : null;
+  const currentUsed = (session.uploadedBytes || 0) + (session.inFlightBytes || 0);
+  const remainingQuota = session.maxTotalBytes ? Math.max(0, session.maxTotalBytes - currentUsed) : null;
 
   if (contentLength > 0) {
     if (remainingQuota !== null && contentLength > remainingQuota) {
@@ -4393,10 +4478,26 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
         error: `Insufficient disk space. Needed: ${formatSize(contentLength)}, Available: ${formatSize(freeBytes)}`
       });
     }
+
+    session.inFlightBytes = (session.inFlightBytes || 0) + contentLength;
   }
+
+  let inFlightReleased = false;
+  const releaseInFlight = () => {
+    if (!inFlightReleased) {
+      inFlightReleased = true;
+      if (contentLength > 0) {
+        session.inFlightBytes = Math.max(0, (session.inFlightBytes || 0) - contentLength);
+      }
+    }
+  };
+  res.on('finish', releaseInFlight);
+  res.on('close', releaseInFlight);
+  req.on('error', releaseInFlight);
 
   // 5. Dynamic Multer instance configured for this session's limits
   const maxSingleFile = session.maxFileBytes || (20 * 1024 * 1024 * 1024);
+  const effectiveMaxFile = remainingQuota !== null ? Math.min(maxSingleFile, remainingQuota) : maxSingleFile;
   const allowedRemainingFiles = session.maxFiles ? Math.max(1, Math.min(50, session.maxFiles - session.uploadedCount)) : 50;
 
   const storage = multer.diskStorage({
@@ -4438,7 +4539,7 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
   const uploadHandler = multer({
     storage,
     limits: {
-      fileSize: maxSingleFile,
+      fileSize: effectiveMaxFile,
       files: allowedRemainingFiles
     }
   }).array('files', allowedRemainingFiles);
@@ -4446,7 +4547,7 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
   uploadHandler(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(413).json({ error: `File exceeds maximum allowed size of ${formatSize(maxSingleFile)}` });
+        return res.status(413).json({ error: `File exceeds maximum allowed size of ${formatSize(effectiveMaxFile)}` });
       }
       if (err.code === 'LIMIT_FILE_COUNT') {
         return res.status(403).json({ error: `Too many files. Session limit is ${session.maxFiles}` });
@@ -4470,7 +4571,7 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
     // Verify written files are strictly inside destDir
     for (const f of uploadedFiles) {
       try {
-        verifySafeContainment(destDir, path.basename(f.path));
+        verifySafeContainment(destDir, f.path);
       } catch (cErr) {
         try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch (_) {}
         return res.status(400).json({ error: 'File containment violation blocked: ' + cErr.message });
@@ -4504,6 +4605,7 @@ module.exports = {
   safePath,
   verifySafeContainment,
   sanitizeFilename,
+  parseContentDispositionFilename,
   isPrivateOrReservedIp,
   validateUrlForSsrf,
   startDownloadTask,

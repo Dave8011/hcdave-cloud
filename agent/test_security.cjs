@@ -22,6 +22,7 @@ const {
   safePath,
   verifySafeContainment,
   sanitizeFilename,
+  parseContentDispositionFilename,
   isPrivateOrReservedIp,
   validateUrlForSsrf,
   startDownloadTask,
@@ -217,6 +218,31 @@ async function main() {
       }, /Path traversal attempt blocked/);
     });
 
+    runTest('safePath strips null bytes and control chars preventing poisoning', () => {
+      const sanitized = safePath(testDriveDir, 'folder/\x00sub/file.txt');
+      assert.strictEqual(sanitized, path.join(testDriveDir, 'folder/sub/file.txt'));
+      assert.strictEqual(sanitized.includes('\x00'), false);
+    });
+
+    runTest('Sanitizes multi-byte UTF-8 filenames to max 255 bytes avoiding ENAMETOOLONG', () => {
+      const longEmojiName = '🔥'.repeat(70) + '.txt'; // 280 bytes UTF-8
+      const sanitized = sanitizeFilename(longEmojiName, 'upload');
+      assert.ok(Buffer.byteLength(sanitized, 'utf8') <= 255, 'Filename bytes must be <= 255');
+      assert.ok(sanitized.endsWith('.txt'), 'File extension must be preserved');
+      // Verify filesystem write succeeds without throwing ENAMETOOLONG
+      const testFilePath = path.join(targetFolder, sanitized);
+      fs.writeFileSync(testFilePath, 'valid_utf8_payload');
+      assert.strictEqual(fs.existsSync(testFilePath), true);
+      fs.unlinkSync(testFilePath);
+    });
+
+    runTest('Sanitizes Windows reserved device names (CON, AUX, NUL, COM1)', () => {
+      assert.strictEqual(sanitizeFilename('CON.txt', 'upload'), '_CON.txt');
+      assert.strictEqual(sanitizeFilename('aux.png', 'upload'), '_aux.png');
+      assert.strictEqual(sanitizeFilename('NUL', 'upload'), '_NUL');
+      assert.strictEqual(sanitizeFilename('com1.dat', 'upload'), '_com1.dat');
+    });
+
     // ═══════════════════════════════════════════════════════════════════
     // SECTION 2: DOWNLOADER CONTENT-DISPOSITION RESPONSE-FILENAME PROTECTION
     // ═══════════════════════════════════════════════════════════════════
@@ -306,6 +332,29 @@ async function main() {
       assert.strictEqual(fs.existsSync(task.targetFile), true);
     });
 
+    runTest('parseContentDispositionFilename adheres to RFC 6266 & RFC 5987 priorities and encodings', () => {
+      // 1. Both filename and filename* present: filename* must take precedence
+      const h1 = 'attachment; filename="legacy.txt"; filename*=UTF-8\'\'%E2%82%AC%20rates.pdf';
+      assert.strictEqual(parseContentDispositionFilename(h1), '€ rates.pdf');
+
+      // 2. filename* with language tag
+      const h2 = 'attachment; filename*=UTF-8\'en\'%E2%82%AC%20rates.pdf';
+      assert.strictEqual(parseContentDispositionFilename(h2), '€ rates.pdf');
+
+      // 3. Quoted filename containing semicolon
+      const h3 = 'attachment; filename="report; 2024.pdf"';
+      assert.strictEqual(parseContentDispositionFilename(h3), 'report; 2024.pdf');
+
+      // 4. Quoted filename with escaped quotes
+      const h4 = 'attachment; filename="my \\"document\\".pdf"';
+      assert.strictEqual(parseContentDispositionFilename(h4), 'my "document".pdf');
+
+      // 5. Hostile traversal in Content-Disposition
+      const h5 = 'attachment; filename="../../../etc/passwd"';
+      assert.strictEqual(parseContentDispositionFilename(h5), '../../../etc/passwd');
+      assert.strictEqual(sanitizeFilename(parseContentDispositionFilename(h5)), 'passwd');
+    });
+
     // ═══════════════════════════════════════════════════════════════════
     // SECTION 3: STRENGTHEN SSRF PROTECTION & IP PINNING
     // ═══════════════════════════════════════════════════════════════════
@@ -334,6 +383,7 @@ async function main() {
 
     const blockedIpv6List = [
       '::', '::1',
+      '::127.0.0.1', '::169.254.169.254', '::10.0.0.1', '::0.0.0.0', // IPv4-compatible IPv6 (RFC 4291)
       '::ffff:127.0.0.1', '::ffff:192.168.1.1',
       '64:ff9b::1', '100::1',
       '2001:db8::1', '2002:c0a8:101::',
@@ -374,6 +424,35 @@ async function main() {
         () => validateUrlForSsrf('http://10.0.0.5:8080/'),
         /Access to private\/internal IP address/
       );
+      // Bracketed IPv6 private literals
+      await assert.rejects(
+        () => validateUrlForSsrf('http://[::1]/admin'),
+        /Access to private\/internal IP address/
+      );
+      await assert.rejects(
+        () => validateUrlForSsrf('http://[::127.0.0.1]/latest/meta-data'),
+        /Access to private\/internal IP address/
+      );
+      await assert.rejects(
+        () => validateUrlForSsrf('http://[::169.254.169.254]/'),
+        /Access to private\/internal IP address/
+      );
+      await assert.rejects(
+        () => validateUrlForSsrf('http://[fc00::1]/service'),
+        /Access to private\/internal IP address/
+      );
+    });
+
+    await runTest('validateUrlForSsrf correctly permits and pins public IP literals without DNS lookup failures', async () => {
+      // Public IPv4 literal
+      const v4 = await validateUrlForSsrf('http://8.8.8.8/file.iso');
+      assert.strictEqual(v4.pinnedIp, '8.8.8.8');
+      assert.strictEqual(v4.pinnedFamily, 4);
+
+      // Public IPv6 bracketed literal
+      const v6 = await validateUrlForSsrf('http://[2607:f8b0:4005:805::200e]/file.iso');
+      assert.strictEqual(v6.pinnedIp, '2607:f8b0:4005:805::200e');
+      assert.strictEqual(v6.pinnedFamily, 6);
     });
 
     await runTest('validateUrlForSsrf blocks localhost and internal hostnames', async () => {
@@ -526,6 +605,45 @@ async function main() {
       const res = await httpRequest({
         port: serverPort,
         path: `/api/quickdrop/${testToken}/upload`,
+        method: 'POST',
+        headers: {
+          'Content-Type': multipart.contentType,
+          'Content-Length': multipart.contentLength
+        },
+        body: multipart.body
+      });
+
+      assert.strictEqual(res.statusCode, 413);
+      assert.ok(res.json.error.includes('exceeds remaining session quota'));
+    });
+
+    await runTest('In-flight bytes reservation prevents concurrent uploads from exceeding quota', async () => {
+      const concurToken = 'concur_' + crypto.randomBytes(8).toString('hex');
+      quickDropSessions.set(concurToken, {
+        token: concurToken,
+        driveId: 'test_drive_id',
+        driveName: 'TestDrive',
+        folder: '/qd_session_files',
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        maxFiles: 5,
+        maxFileBytes: 10000,
+        maxTotalBytes: 6000, // 6 KB total quota
+        inFlightBytes: 4500, // 4.5 KB currently in-flight
+        uploadedCount: 0,
+        uploadedBytes: 0,
+        uploadedFiles: []
+      });
+
+      // An incoming 2.5 KB upload would exceed remaining quota (6000 - 4500 = 1500 remaining)
+      const payload = Buffer.alloc(2500, 'C');
+      const multipart = buildMultipartBody({}, [
+        { fieldname: 'files', filename: 'concur_file.dat', content: payload }
+      ]);
+
+      const res = await httpRequest({
+        port: serverPort,
+        path: `/api/quickdrop/${concurToken}/upload`,
         method: 'POST',
         headers: {
           'Content-Type': multipart.contentType,

@@ -74,6 +74,7 @@ export function QuickDropPage({ token, onGoHome }) {
 
   const handleUpload = async () => {
     if (!selectedFiles.length || uploading) return;
+    const batchTotalBytes = selectedFiles.reduce((acc, f) => acc + (f.size || 0), 0);
     setUploading(true);
     setUploadProgress(0);
     setError(null);
@@ -84,8 +85,8 @@ export function QuickDropPage({ token, onGoHome }) {
       return;
     }
     const remainingQuota = session?.maxTotalBytes ? (session.maxTotalBytes - (session.uploadedBytes || 0)) : null;
-    if (remainingQuota !== null && totalBytes > remainingQuota) {
-      setError(`Selected files (${formatSize(totalBytes)}) exceed remaining session quota of ${formatSize(remainingQuota)}`);
+    if (remainingQuota !== null && batchTotalBytes > remainingQuota) {
+      setError(`Selected files (${formatSize(batchTotalBytes)}) exceed remaining session quota of ${formatSize(remainingQuota)}`);
       setUploading(false);
       return;
     }
@@ -100,7 +101,7 @@ export function QuickDropPage({ token, onGoHome }) {
       setSession(prev => prev ? {
         ...prev,
         uploadedCount: result.uploadedCount ?? (prev.uploadedCount + selectedFiles.length),
-        uploadedBytes: result.uploadedBytes ?? ((prev.uploadedBytes || 0) + totalBytes)
+        uploadedBytes: result.uploadedBytes ?? ((prev.uploadedBytes || 0) + batchTotalBytes)
       } : prev);
     } catch (err) {
       setError(err.message || 'Upload failed. Please check network connection.');
