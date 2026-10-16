@@ -158,23 +158,35 @@ function safePath(baseDir, userPath) {
   const cleanPath = (userPath || '/').replace(/[\x00-\x1F\x7F]/g, '').replace(/^(\/|\\)+/, '');
   const resolved = path.resolve(resolvedBase, cleanPath);
   const rel = path.relative(resolvedBase, resolved);
-  if (rel.startsWith('..') || path.isAbsolute(rel) || (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + path.sep))) {
+  const baseWithSep = resolvedBase.endsWith(path.sep) ? resolvedBase : resolvedBase + path.sep;
+  if (rel.startsWith('..') || path.isAbsolute(rel) || (resolved !== resolvedBase && !resolved.startsWith(baseWithSep))) {
     throw new Error('Path traversal attempt blocked');
   }
   return resolved;
 }
 
-function verifySafeContainment(baseDir, relativeOrFilename) {
+function verifySafeContainment(baseDir, relativeOrFilename, allowSame = false) {
   const resolvedBase = path.resolve(baseDir);
-  const resolvedTarget = path.resolve(baseDir, relativeOrFilename);
+  const resolvedTarget = path.resolve(baseDir, relativeOrFilename || '');
   const rel = path.relative(resolvedBase, resolvedTarget);
-  if (rel.startsWith('..') || path.isAbsolute(rel) || rel === '' || !resolvedTarget.startsWith(resolvedBase + path.sep)) {
+  const baseWithSep = resolvedBase.endsWith(path.sep) ? resolvedBase : resolvedBase + path.sep;
+
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error('Path traversal attempt blocked: path escapes destination directory');
+  }
+  if (resolvedTarget === resolvedBase) {
+    if (!allowSame) {
+      throw new Error('Path traversal attempt blocked: path escapes destination directory');
+    }
+    return resolvedTarget;
+  }
+  if (!resolvedTarget.startsWith(baseWithSep)) {
     throw new Error('Path traversal attempt blocked: path escapes destination directory');
   }
   return resolvedTarget;
 }
 
-function sanitizeFilename(rawName, fallback = 'upload') {
+function sanitizeFilename(rawName, fallback = 'upload', maxBytes = 255) {
   if (typeof rawName !== 'string') return fallback;
   let name = rawName;
   try {
@@ -210,19 +222,51 @@ function sanitizeFilename(rawName, fallback = 'upload') {
     base = fallback;
   }
 
-  // Truncate to max 255 BYTES (Linux ext4/xfs limit is 255 bytes, NOT characters)
-  if (Buffer.byteLength(base, 'utf8') > 255) {
-    const ext = path.extname(base);
+  // Truncate to maxBytes (Linux ext4/xfs limit is 255 bytes, NOT characters)
+  if (Buffer.byteLength(base, 'utf8') > maxBytes) {
+    let ext = path.extname(base);
+    const maxAllowedExtBytes = Math.floor(maxBytes * 0.7);
+    if (Buffer.byteLength(ext, 'utf8') > maxAllowedExtBytes) {
+      while (Buffer.byteLength(ext, 'utf8') > maxAllowedExtBytes && ext.length > 0) {
+        ext = ext.slice(0, -1);
+      }
+    }
     const extBytes = Buffer.byteLength(ext, 'utf8');
-    const maxStemBytes = Math.max(1, 255 - extBytes);
-    let s = path.basename(base, ext);
+    const maxStemBytes = Math.max(0, maxBytes - extBytes);
+    let s = path.basename(base, path.extname(base));
     while (Buffer.byteLength(s, 'utf8') > maxStemBytes && s.length > 0) {
       s = s.slice(0, -1);
     }
     base = s + ext;
+    while (Buffer.byteLength(base, 'utf8') > maxBytes && base.length > 0) {
+      base = base.slice(0, -1);
+    }
+    if (!base || base === '.' || base === '..' || base.trim() === '') {
+      base = fallback;
+    }
   }
 
   return base;
+}
+
+function getUniqueFilename(dir, baseFilename, maxBytes = 255) {
+  const safeBase = sanitizeFilename(baseFilename, 'file', maxBytes);
+  const ext = path.extname(safeBase);
+  const extBytes = Buffer.byteLength(ext, 'utf8');
+  let finalName = safeBase;
+  let counter = 1;
+  while (fs.existsSync(path.join(dir, finalName))) {
+    const suffix = ` (${counter})`;
+    const suffixBytes = Buffer.byteLength(suffix, 'utf8');
+    const maxStemBytes = Math.max(1, maxBytes - extBytes - suffixBytes);
+    let s = path.basename(safeBase, ext);
+    while (Buffer.byteLength(s, 'utf8') > maxStemBytes && s.length > 0) {
+      s = s.slice(0, -1);
+    }
+    finalName = `${s}${suffix}${ext}`;
+    counter++;
+  }
+  return finalName;
 }
 
 /* ─────────────────────────────────────────────
@@ -437,6 +481,7 @@ function getFileType(name, isDir) {
 }
 
 function formatSize(bytes) {
+  if (bytes == null || isNaN(bytes) || bytes <= 0) return '0 B';
   if (bytes < 1024)             return `${bytes} B`;
   if (bytes < 1024 * 1024)     return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 ** 3)       return `${(bytes / (1024 ** 2)).toFixed(1)} MB`;
@@ -3698,10 +3743,12 @@ const IPV6_BLOCKED_RANGES = [
   { cidr: '::ffff:0:0/96',   base: parseIpv6('::ffff:0:0'),   prefix: 96 },   // IPv4-mapped (RFC 4291)
   { cidr: '64:ff9b::/96',    base: parseIpv6('64:ff9b::'),    prefix: 96 },   // NAT64 Well-Known (RFC 6052)
   { cidr: '100::/64',        base: parseIpv6('100::'),        prefix: 64 },   // Discard prefix (RFC 6666)
+  { cidr: '2001::/23',       base: parseIpv6('2001::'),       prefix: 23 },   // IETF protocol assignments (RFC 2928)
   { cidr: '2001:db8::/32',   base: parseIpv6('2001:db8::'),   prefix: 32 },   // Documentation (RFC 3849)
   { cidr: '2002::/16',       base: parseIpv6('2002::'),       prefix: 16 },   // 6to4 (RFC 3056)
   { cidr: 'fc00::/7',        base: parseIpv6('fc00::'),        prefix: 7 },    // Unique Local (RFC 4193)
   { cidr: 'fe80::/10',       base: parseIpv6('fe80::'),       prefix: 10 },   // Link-local (RFC 4291)
+  { cidr: 'fec0::/10',       base: parseIpv6('fec0::'),       prefix: 10 },   // Site-local deprecated (RFC 3879)
   { cidr: 'ff00::/8',        base: parseIpv6('ff00::'),        prefix: 8 }     // Multicast (RFC 4291)
 ];
 
@@ -3786,7 +3833,7 @@ async function validateUrlForSsrf(targetUrl) {
   // Strip brackets from IPv6 hostnames
   const cleanHost = hostname.replace(/^\[|\]$/g, '');
 
-  if (cleanHost === 'localhost' || cleanHost.endsWith('.local') || cleanHost.endsWith('.internal')) {
+  if (cleanHost === 'localhost' || cleanHost.endsWith('.localhost') || cleanHost.endsWith('.local') || cleanHost.endsWith('.internal') || cleanHost.endsWith('.lan') || cleanHost.endsWith('.home') || cleanHost.endsWith('.arpa')) {
     throw new Error('Access to local/internal network hostnames is blocked for security');
   }
 
@@ -3902,6 +3949,7 @@ async function startDownloadTask(task) {
       }
       const redirectUrl = new URL(res.headers.location, task.url).toString();
       validateUrlForSsrf(redirectUrl).then((validated) => {
+        if (task.status === 'paused' || task.status === 'canceled') return;
         task.url = redirectUrl;
         task.pinnedIp = validated.pinnedIp;
         task.pinnedFamily = validated.pinnedFamily;
@@ -3942,21 +3990,12 @@ async function startDownloadTask(task) {
     if (cd) {
       const rawCdName = parseContentDispositionFilename(cd);
       if (rawCdName) {
-        const safeCdName = sanitizeFilename(rawCdName, task.filename || 'download');
+        const safeCdName = sanitizeFilename(rawCdName, task.filename || 'download', 250);
         try {
           verifySafeContainment(task.destDir, safeCdName);
 
-          let candidateName = safeCdName;
-          const parsedCd = path.parse(safeCdName);
-          let c = 1;
-          while (
-            (fs.existsSync(path.join(task.destDir, candidateName)) && path.join(task.destDir, candidateName) !== task.targetFile) ||
-            (task.partFile !== path.join(task.destDir, `${candidateName}.part`) && fs.existsSync(path.join(task.destDir, `${candidateName}.part`)))
-          ) {
-            candidateName = `${parsedCd.name} (${c})${parsedCd.ext}`;
-            verifySafeContainment(task.destDir, candidateName);
-            c++;
-          }
+          const candidateName = getUniqueFilename(task.destDir, safeCdName, 250);
+          verifySafeContainment(task.destDir, candidateName);
 
           const newTarget = path.join(task.destDir, candidateName);
           const newPart = `${newTarget}.part`;
@@ -4021,14 +4060,9 @@ async function startDownloadTask(task) {
 
           let finalTarget = task.targetFile;
           if (fs.existsSync(finalTarget)) {
-            const parsedName = path.parse(finalTarget);
-            let counter = 1;
-            while (fs.existsSync(finalTarget)) {
-              const candidate = `${parsedName.name} (${counter})${parsedName.ext}`;
-              verifySafeContainment(task.destDir, candidate);
-              finalTarget = path.join(task.destDir, candidate);
-              counter++;
-            }
+            const candidate = getUniqueFilename(task.destDir, task.filename, 250);
+            verifySafeContainment(task.destDir, candidate);
+            finalTarget = path.join(task.destDir, candidate);
           }
           verifySafeContainment(task.destDir, finalTarget);
           task.targetFile = finalTarget;
@@ -4127,7 +4161,7 @@ app.post('/api/remote-downloads', rateLimitAuth, auth, async (req, res) => {
     let destDir;
     try {
       destDir = safePath(drive.mount, folder);
-      verifySafeContainment(drive.mount, path.relative(drive.mount, destDir));
+      verifySafeContainment(drive.mount, destDir, true);
     } catch (e) {
       return res.status(400).json({ error: 'Invalid destination directory: ' + e.message });
     }
@@ -4142,8 +4176,8 @@ app.post('/api/remote-downloads', rateLimitAuth, auth, async (req, res) => {
         finalName = 'download';
       }
     }
-    // Sanitize filename and enforce destination containment
-    finalName = sanitizeFilename(finalName, 'download');
+    // Sanitize filename and enforce destination containment (max 250 bytes to leave 5 bytes for .part)
+    finalName = sanitizeFilename(finalName, 'download', 250);
     verifySafeContainment(destDir, finalName);
 
     const targetFile = path.join(destDir, finalName);
@@ -4321,7 +4355,7 @@ app.post('/api/quickdrop/create', rateLimitAuth, auth, (req, res) => {
     if (!drive) return res.status(404).json({ error: 'Drive not found' });
 
     const dest = safePath(drive.mount, folder);
-    verifySafeContainment(drive.mount, path.relative(drive.mount, dest));
+    verifySafeContainment(drive.mount, dest, true);
     fs.mkdirSync(dest, { recursive: true });
 
     const token = crypto.randomBytes(16).toString('hex');
@@ -4454,7 +4488,7 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
   let destDir;
   try {
     destDir = safePath(drive.mount, session.folder);
-    verifySafeContainment(drive.mount, path.relative(drive.mount, destDir));
+    verifySafeContainment(drive.mount, destDir, true);
   } catch (err) {
     return res.status(400).json({ error: 'Invalid destination folder' });
   }
@@ -4465,17 +4499,24 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
   const currentUsed = (session.uploadedBytes || 0) + (session.inFlightBytes || 0);
   const remainingQuota = session.maxTotalBytes ? Math.max(0, session.maxTotalBytes - currentUsed) : null;
 
+  if (remainingQuota !== null && remainingQuota <= 0) {
+    return res.status(413).json({ error: 'Session storage quota reached' });
+  }
+
+  const freeBytes = getFreeDiskSpace(destDir);
+  const SAFETY_BUFFER = 50 * 1024 * 1024; // 50 MB safety margin
+  if (freeBytes !== null) {
+    if (freeBytes < SAFETY_BUFFER || (contentLength > 0 && contentLength + SAFETY_BUFFER > freeBytes)) {
+      return res.status(507).json({
+        error: `Insufficient disk space. Needed: ${formatSize(contentLength)}, Available: ${formatSize(freeBytes)}`
+      });
+    }
+  }
+
   if (contentLength > 0) {
     if (remainingQuota !== null && contentLength > remainingQuota) {
       return res.status(413).json({
         error: `Upload size (${formatSize(contentLength)}) exceeds remaining session quota of ${formatSize(remainingQuota)}`
-      });
-    }
-    const freeBytes = getFreeDiskSpace(destDir);
-    const SAFETY_BUFFER = 50 * 1024 * 1024; // 50 MB safety margin
-    if (freeBytes !== null && (contentLength + SAFETY_BUFFER > freeBytes)) {
-      return res.status(507).json({
-        error: `Insufficient disk space. Needed: ${formatSize(contentLength)}, Available: ${formatSize(freeBytes)}`
       });
     }
 
@@ -4491,9 +4532,32 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
       }
     }
   };
-  res.on('finish', releaseInFlight);
-  res.on('close', releaseInFlight);
+
+  let uploadFinished = false;
+  res.on('finish', () => {
+    uploadFinished = true;
+    releaseInFlight();
+  });
+  res.on('close', () => {
+    releaseInFlight();
+    if (!uploadFinished) {
+      for (const f of req._activeFilePaths || []) {
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {}
+      }
+    }
+  });
   req.on('error', releaseInFlight);
+
+  // Stream quota monitor for chunked uploads without Content-Length
+  let streamBytes = 0;
+  let streamAborted = false;
+  req.on('data', chunk => {
+    streamBytes += chunk.length;
+    if (remainingQuota !== null && streamBytes > remainingQuota + 2 * 1024 * 1024 && !streamAborted) {
+      streamAborted = true;
+      req.destroy(new Error('LIMIT_QUOTA_EXCEEDED'));
+    }
+  });
 
   // 5. Dynamic Multer instance configured for this session's limits
   const maxSingleFile = session.maxFileBytes || (20 * 1024 * 1024 * 1024);
@@ -4504,7 +4568,7 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
     destination: (r, file, cb) => {
       try {
         const dest = safePath(drive.mount, session.folder);
-        verifySafeContainment(drive.mount, path.relative(drive.mount, dest));
+        verifySafeContainment(drive.mount, dest, true);
         fs.mkdirSync(dest, { recursive: true });
         cb(null, dest);
       } catch (err) {
@@ -4515,20 +4579,17 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
       try {
         const dest = safePath(drive.mount, session.folder);
         // Sanitize both / and \, null bytes, control chars, reduce to safe basename
-        const safeName = sanitizeFilename(file.originalname, 'upload');
+        const safeName = sanitizeFilename(file.originalname, 'upload', 255);
         // Verify output path remains strictly inside destination directory
         verifySafeContainment(dest, safeName);
 
-        const parsedName = path.parse(safeName);
-        let finalName = safeName;
-        let target = path.join(dest, finalName);
-        let counter = 1;
-        while (fs.existsSync(target)) {
-          finalName = `${parsedName.name} (${counter})${parsedName.ext}`;
-          verifySafeContainment(dest, finalName);
-          target = path.join(dest, finalName);
-          counter++;
-        }
+        const finalName = getUniqueFilename(dest, safeName, 255);
+        verifySafeContainment(dest, finalName);
+
+        const fullPath = path.join(dest, finalName);
+        r._activeFilePaths = r._activeFilePaths || new Set();
+        r._activeFilePaths.add(fullPath);
+
         cb(null, finalName);
       } catch (err) {
         cb(err);
@@ -4546,6 +4607,12 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
 
   uploadHandler(req, res, (err) => {
     if (err) {
+      for (const f of req._activeFilePaths || []) {
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {}
+      }
+      if (err.message === 'LIMIT_QUOTA_EXCEEDED') {
+        return res.status(413).json({ error: `Upload exceeds session storage quota of ${formatSize(session.maxTotalBytes)}` });
+      }
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({ error: `File exceeds maximum allowed size of ${formatSize(effectiveMaxFile)}` });
       }
@@ -4605,6 +4672,7 @@ module.exports = {
   safePath,
   verifySafeContainment,
   sanitizeFilename,
+  getUniqueFilename,
   parseContentDispositionFilename,
   isPrivateOrReservedIp,
   validateUrlForSsrf,

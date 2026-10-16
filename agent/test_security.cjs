@@ -22,6 +22,7 @@ const {
   safePath,
   verifySafeContainment,
   sanitizeFilename,
+  getUniqueFilename,
   parseContentDispositionFilename,
   isPrivateOrReservedIp,
   validateUrlForSsrf,
@@ -241,6 +242,55 @@ async function main() {
       assert.strictEqual(sanitizeFilename('aux.png', 'upload'), '_aux.png');
       assert.strictEqual(sanitizeFilename('NUL', 'upload'), '_NUL');
       assert.strictEqual(sanitizeFilename('com1.dat', 'upload'), '_com1.dat');
+    });
+
+    runTest('Sanitizes super-long extensions to max 255 bytes avoiding ENAMETOOLONG', () => {
+      const superLongExt = 'document.' + 'a'.repeat(300);
+      const sanitized = sanitizeFilename(superLongExt, 'upload');
+      assert.ok(Buffer.byteLength(sanitized, 'utf8') <= 255, 'Filename bytes must be <= 255 even with 300-byte ext');
+      const testFilePath = path.join(targetFolder, sanitized);
+      fs.writeFileSync(testFilePath, 'valid_payload');
+      assert.strictEqual(fs.existsSync(testFilePath), true);
+      fs.unlinkSync(testFilePath);
+    });
+
+    runTest('getUniqueFilename preserves <= 255 bytes on collision avoiding ENAMETOOLONG', () => {
+      const base255 = 'a'.repeat(251) + '.txt';
+      const file1 = path.join(targetFolder, base255);
+      fs.writeFileSync(file1, 'first');
+
+      const unique2 = getUniqueFilename(targetFolder, base255);
+      assert.ok(Buffer.byteLength(unique2, 'utf8') <= 255, 'Collision filename bytes must be <= 255');
+      const file2 = path.join(targetFolder, unique2);
+      fs.writeFileSync(file2, 'second');
+      assert.strictEqual(fs.existsSync(file2), true);
+
+      const unique3 = getUniqueFilename(targetFolder, base255);
+      assert.ok(Buffer.byteLength(unique3, 'utf8') <= 255, 'Second collision filename bytes must be <= 255');
+      const file3 = path.join(targetFolder, unique3);
+      fs.writeFileSync(file3, 'third');
+      assert.strictEqual(fs.existsSync(file3), true);
+
+      fs.unlinkSync(file1);
+      fs.unlinkSync(file2);
+      fs.unlinkSync(file3);
+    });
+
+    runTest('verifySafeContainment and safePath correctly permit drive root and subpaths', () => {
+      const driveRoot = '/tmp';
+      const resolvedRoot = safePath(driveRoot, '/');
+      assert.strictEqual(resolvedRoot, path.resolve(driveRoot));
+      const containedRoot = verifySafeContainment(driveRoot, resolvedRoot, true);
+      assert.strictEqual(containedRoot, path.resolve(driveRoot));
+
+      const sub = safePath(driveRoot, '/subfolder');
+      const containedSub = verifySafeContainment(driveRoot, sub, true);
+      assert.strictEqual(containedSub, path.resolve(driveRoot, 'subfolder'));
+
+      // Escapes still blocked even with allowSame=true
+      assert.throws(() => {
+        verifySafeContainment(driveRoot, '/etc/shadow', true);
+      }, /Path traversal attempt blocked/);
     });
 
     // ═══════════════════════════════════════════════════════════════════
@@ -825,6 +875,137 @@ async function main() {
       assert.strictEqual(fs.existsSync(targetFile), true);
       assert.strictEqual(fs.statSync(targetFile).size, fullPayload.length);
       assert.strictEqual(fs.existsSync(partFile), false, 'Partfile should be cleaned up on completion');
+    });
+
+    await runTest('QuickDrop session creation and upload directly to drive root (folder: /) succeeds', async () => {
+      // 1. Create session with folder: '/'
+      const createRes = await httpRequest({
+        port: serverPort,
+        path: '/api/quickdrop/create',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ChangeMe@2024'
+        },
+        body: {
+          driveId: 'mock_main_drive',
+          folder: '/'
+        }
+      });
+      assert.strictEqual(createRes.statusCode, 200);
+      assert.strictEqual(createRes.json.success, true);
+      const rootToken = createRes.json.token;
+
+      // 2. Upload to root
+      const boundary = '----WebKitFormBoundaryRootTest123';
+      const rootFileContent = Buffer.from('CONTENT_AT_ROOT');
+      const body = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="root_test.txt"\r\nContent-Type: text/plain\r\n\r\n`),
+        rootFileContent,
+        Buffer.from(`\r\n--${boundary}--\r\n`)
+      ]);
+
+      const uploadRes = await httpRequest({
+        port: serverPort,
+        path: `/api/quickdrop/${rootToken}/upload`,
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length
+        },
+        body
+      });
+      assert.strictEqual(uploadRes.statusCode, 200);
+      assert.strictEqual(uploadRes.json.success, true);
+      assert.strictEqual(fs.existsSync(path.join(testDriveDir, 'root_test.txt')), true);
+    });
+
+    await runTest('Aborted chunked upload cleans up partial files on disk without leaking', async () => {
+      const abortToken = 'abort_token_' + crypto.randomBytes(4).toString('hex');
+      quickDropSessions.set(abortToken, {
+        token: abortToken,
+        driveId: 'mock_main_drive',
+        driveName: 'MainDrive',
+        folder: '/abort_dir',
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60000,
+        maxFiles: 5,
+        maxFileBytes: 10 * 1024 * 1024,
+        maxTotalBytes: 50 * 1024 * 1024,
+        uploadedCount: 0,
+        uploadedBytes: 0,
+        uploadedFiles: []
+      });
+
+      const abortDest = path.join(testDriveDir, 'abort_dir');
+      fs.mkdirSync(abortDest, { recursive: true });
+
+      const boundary = '----WebKitFormBoundaryAbort123';
+      await new Promise((resolve) => {
+        const req = http.request({
+          hostname: '127.0.0.1',
+          port: serverPort,
+          path: `/api/quickdrop/${abortToken}/upload`,
+          method: 'POST',
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            'Transfer-Encoding': 'chunked'
+          }
+        });
+        req.on('error', () => {});
+        req.write(`--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="aborted.bin"\r\nContent-Type: application/octet-stream\r\n\r\nPARTIAL_BYTES_TEST`);
+        setTimeout(() => {
+          req.destroy();
+          setTimeout(() => {
+            const files = fs.readdirSync(abortDest);
+            assert.strictEqual(files.length, 0, 'No partial files should remain after client abort');
+            resolve();
+          }, 300);
+        }, 100);
+      });
+    });
+
+    await runTest('Chunked multipart upload exceeding aggregate quota rejects and unlinks all batch files', async () => {
+      const batchQuotaToken = 'quota_token_' + crypto.randomBytes(4).toString('hex');
+      quickDropSessions.set(batchQuotaToken, {
+        token: batchQuotaToken,
+        driveId: 'mock_main_drive',
+        driveName: 'MainDrive',
+        folder: '/batch_quota_dir',
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60000,
+        maxFiles: 5,
+        maxFileBytes: 10 * 1024 * 1024,
+        maxTotalBytes: 1000, // 1000 bytes quota
+        uploadedCount: 0,
+        uploadedBytes: 0,
+        uploadedFiles: []
+      });
+
+      const batchDest = path.join(testDriveDir, 'batch_quota_dir');
+      fs.mkdirSync(batchDest, { recursive: true });
+
+      const boundary = '----WebKitFormBoundaryBatch123';
+      const body = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="part1.txt"\r\nContent-Type: text/plain\r\n\r\n${'A'.repeat(600)}\r\n`),
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="part2.txt"\r\nContent-Type: text/plain\r\n\r\n${'B'.repeat(600)}\r\n`),
+        Buffer.from(`--${boundary}--\r\n`)
+      ]);
+
+      const res = await httpRequest({
+        port: serverPort,
+        path: `/api/quickdrop/${batchQuotaToken}/upload`,
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Transfer-Encoding': 'chunked'
+        },
+        body
+      });
+
+      assert.strictEqual(res.statusCode, 413);
+      const files = fs.readdirSync(batchDest);
+      assert.strictEqual(files.length, 0, 'All files in exceeded batch quota should be deleted');
     });
 
     rangeServer.close();
