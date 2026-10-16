@@ -736,4 +736,125 @@ export class StorageService {
     return data; // { stdout, stderr, requireConfirmation, message }
   }
   // 🛡️ END HC CLOUD ADMIN TERMINAL ───────────────────────────────────────────
+
+  // ── DIRECT-TO-CLOUD REMOTE DOWNLOADER ──────────────────────────────────────
+  static async getRemoteDownloads() {
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/api/remote-downloads`, {
+        headers: this.headers()
+      });
+      if (!r.ok) throw new Error('Failed to fetch remote downloads');
+      const data = await r.json();
+      return data.downloads || [];
+    } catch (e) {
+      console.error('getRemoteDownloads error:', e);
+      return [];
+    }
+  }
+
+  static async startRemoteDownload(params) {
+    const r = await fetch(`${this.getAgentUrl()}/api/remote-downloads`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(params)
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to start download');
+    return data;
+  }
+
+  static async pauseRemoteDownload(id) {
+    const r = await fetch(`${this.getAgentUrl()}/api/remote-downloads/${encodeURIComponent(id)}/pause`, {
+      method: 'POST',
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to pause download');
+    return data;
+  }
+
+  static async resumeRemoteDownload(id) {
+    const r = await fetch(`${this.getAgentUrl()}/api/remote-downloads/${encodeURIComponent(id)}/resume`, {
+      method: 'POST',
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to resume download');
+    return data;
+  }
+
+  static async deleteRemoteDownload(id, deleteFile = false) {
+    const r = await fetch(`${this.getAgentUrl()}/api/remote-downloads/${encodeURIComponent(id)}?deleteFile=${deleteFile}`, {
+      method: 'DELETE',
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to delete download');
+    return data;
+  }
+
+  // ── QUICKDROP PHONE-TO-CLOUD ───────────────────────────────────────────────
+  static async createQuickDrop(params) {
+    const r = await fetch(`${this.getAgentUrl()}/api/quickdrop/create`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(params)
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to create QuickDrop session');
+    return data;
+  }
+
+  static async getQuickDrop(token) {
+    const r = await fetch(`${this.getAgentUrl()}/api/quickdrop/${encodeURIComponent(token)}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'QuickDrop session invalid or expired');
+    return data;
+  }
+
+  static async getQuickDropStatus(token) {
+    const r = await fetch(`${this.getAgentUrl()}/api/quickdrop/${encodeURIComponent(token)}/status`, {
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to fetch QuickDrop status');
+    return data;
+  }
+
+  static uploadQuickDropFiles(token, files, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${this.getAgentUrl()}/api/quickdrop/${encodeURIComponent(token)}/upload`);
+
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            onProgress({ loaded: e.loaded, total: e.total, percent });
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        try {
+          const res = JSON.parse(xhr.responseText);
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(res);
+          } else {
+            reject(new Error(res.error || 'Upload failed'));
+          }
+        } catch (e) {
+          reject(new Error('Server responded with invalid format'));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+
+      const formData = new FormData();
+      for (const file of files) {
+        formData.append('files', file);
+      }
+      xhr.send(formData);
+    });
+  }
 }

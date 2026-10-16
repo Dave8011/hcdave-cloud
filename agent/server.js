@@ -3509,4 +3509,597 @@ app.delete('/api/backup/archive', rateLimitAuth, auth, (req, res) => {
   }
 });
 
+/* ─────────────────────────────────────────────
+   DIRECT-TO-CLOUD REMOTE DOWNLOADER
+   ───────────────────────────────────────────── */
+const dnsPromises = require('dns').promises;
+const remoteDownloadsFile = path.join(__dirname, 'remote_downloads.json');
+let remoteDownloads = [];
+
+function loadRemoteDownloads() {
+  try {
+    if (fs.existsSync(remoteDownloadsFile)) {
+      remoteDownloads = JSON.parse(fs.readFileSync(remoteDownloadsFile, 'utf8'));
+    }
+  } catch (_) {
+    remoteDownloads = [];
+  }
+}
+
+function saveRemoteDownloads() {
+  try {
+    const data = remoteDownloads.map(d => ({
+      id: d.id,
+      url: d.url,
+      driveId: d.driveId,
+      driveName: d.driveName,
+      folder: d.folder,
+      filename: d.filename,
+      status: d.status === 'downloading' ? 'paused' : d.status,
+      totalBytes: d.totalBytes,
+      downloadedBytes: d.downloadedBytes,
+      speed: 0,
+      percent: d.percent,
+      eta: 0,
+      resumable: d.resumable,
+      expectedHash: d.expectedHash,
+      sha256: d.sha256,
+      hashMatched: d.hashMatched,
+      error: d.error,
+      createdAt: d.createdAt,
+      completedAt: d.completedAt
+    }));
+    fs.writeFileSync(remoteDownloadsFile, JSON.stringify(data, null, 2), 'utf8');
+  } catch (_) {}
+}
+
+loadRemoteDownloads();
+
+const activeDownloadReqs = new Map();
+
+function isPrivateIp(ip) {
+  if (!ip) return true;
+  if (ip === 'localhost' || ip === '0.0.0.0' || ip === '::1') return true;
+  if (ip.startsWith('127.')) return true;
+  if (ip.startsWith('10.')) return true;
+  if (ip.startsWith('192.168.')) return true;
+  if (ip.startsWith('169.254.')) return true;
+  const parts = ip.split('.').map(Number);
+  if (parts.length === 4) {
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    if (parts[0] === 0) return true;
+  }
+  const lower = ip.toLowerCase();
+  if (lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80')) return true;
+  return false;
+}
+
+async function validateUrlForSsrf(targetUrl) {
+  let parsed;
+  try {
+    parsed = new URL(targetUrl);
+  } catch (_) {
+    throw new Error('Invalid URL format');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only HTTP and HTTPS URLs are allowed');
+  }
+  const hostname = parsed.hostname;
+  if (!hostname || hostname === 'localhost' || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
+    throw new Error('Access to local/internal network hostnames is blocked for security');
+  }
+
+  try {
+    const records = await dnsPromises.lookup(hostname, { all: true });
+    for (const rec of records) {
+      if (isPrivateIp(rec.address)) {
+        throw new Error(`Access to private/internal IP address (${rec.address}) is blocked for security`);
+      }
+    }
+  } catch (err) {
+    if (err.message.includes('blocked for security')) throw err;
+    throw new Error(`DNS resolution failed for hostname "${hostname}": ${err.message}`);
+  }
+  return parsed;
+}
+
+function startDownloadTask(task) {
+  const parsed = new URL(task.url);
+  const client = parsed.protocol === 'https:' ? https : http;
+
+  let existingBytes = 0;
+  if (fs.existsSync(task.partFile)) {
+    try {
+      existingBytes = fs.statSync(task.partFile).size;
+    } catch (_) {
+      existingBytes = 0;
+    }
+  }
+
+  task.downloadedBytes = existingBytes;
+  task.status = 'downloading';
+  task.error = null;
+
+  const headers = {
+    'User-Agent': 'HCDaveCloud-Downloader/1.4'
+  };
+
+  if (existingBytes > 0) {
+    headers['Range'] = `bytes=${existingBytes}-`;
+  }
+
+  let lastBytes = existingBytes;
+  let lastTime = Date.now();
+
+  const req = client.get(task.url, { headers }, (res) => {
+    if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+      const redirectUrl = new URL(res.headers.location, task.url).toString();
+      validateUrlForSsrf(redirectUrl).then(() => {
+        task.url = redirectUrl;
+        startDownloadTask(task);
+      }).catch(err => {
+        task.status = 'failed';
+        task.error = 'Redirect blocked: ' + err.message;
+        saveRemoteDownloads();
+      });
+      return;
+    }
+
+    if (res.statusCode !== 200 && res.statusCode !== 206) {
+      task.status = 'failed';
+      task.error = `HTTP Error ${res.statusCode}: ${res.statusMessage || 'Download failed'}`;
+      saveRemoteDownloads();
+      return;
+    }
+
+    const isPartial = res.statusCode === 206;
+    task.resumable = isPartial || res.headers['accept-ranges'] === 'bytes';
+
+    if (isPartial) {
+      const cr = res.headers['content-range'];
+      if (cr) {
+        const m = cr.match(/bytes\s+\d+-\d+\/(\d+)/);
+        if (m) task.totalBytes = parseInt(m[1], 10);
+      }
+    } else {
+      task.downloadedBytes = 0;
+      existingBytes = 0;
+      const cl = res.headers['content-length'];
+      if (cl) task.totalBytes = parseInt(cl, 10);
+    }
+
+    if (!task.filename || task.filename === 'download') {
+      const cd = res.headers['content-disposition'];
+      if (cd) {
+        const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i);
+        if (m && m[1]) {
+          task.filename = decodeURIComponent(m[1].trim());
+          task.targetFile = path.join(task.destDir, task.filename);
+          task.partFile = `${task.targetFile}.part`;
+        }
+      }
+    }
+
+    const writeStream = fs.createWriteStream(task.partFile, { flags: isPartial ? 'a' : 'w' });
+
+    res.on('data', (chunk) => {
+      task.downloadedBytes += chunk.length;
+      const now = Date.now();
+      const elapsed = (now - lastTime) / 1000;
+      if (elapsed >= 1) {
+        task.speed = Math.round((task.downloadedBytes - lastBytes) / elapsed);
+        lastBytes = task.downloadedBytes;
+        lastTime = now;
+
+        if (task.totalBytes > 0) {
+          task.percent = Math.min(100, Math.round((task.downloadedBytes / task.totalBytes) * 100));
+          const remaining = task.totalBytes - task.downloadedBytes;
+          task.eta = task.speed > 0 ? Math.round(remaining / task.speed) : 0;
+        } else {
+          task.percent = 0;
+          task.eta = 0;
+        }
+      }
+    });
+
+    res.pipe(writeStream);
+
+    writeStream.on('finish', () => {
+      writeStream.close(async () => {
+        if (task.status !== 'downloading') return;
+
+        try {
+          if (fs.existsSync(task.targetFile)) {
+            const parsedName = path.parse(task.targetFile);
+            let counter = 1;
+            let finalTarget = task.targetFile;
+            while (fs.existsSync(finalTarget)) {
+              finalTarget = path.join(parsedName.dir, `${parsedName.name} (${counter})${parsedName.ext}`);
+              counter++;
+            }
+            task.targetFile = finalTarget;
+            task.filename = path.basename(finalTarget);
+          }
+
+          fs.renameSync(task.partFile, task.targetFile);
+
+          const hash = crypto.createHash('sha256');
+          const fileStream = fs.createReadStream(task.targetFile);
+          fileStream.on('data', c => hash.update(c));
+          fileStream.on('end', () => {
+            task.sha256 = hash.digest('hex');
+            if (task.expectedHash) {
+              task.hashMatched = (task.sha256.toLowerCase() === task.expectedHash.trim().toLowerCase());
+            }
+            task.status = 'completed';
+            task.percent = 100;
+            task.speed = 0;
+            task.eta = 0;
+            task.completedAt = Date.now();
+            activeDownloadReqs.delete(task.id);
+            saveRemoteDownloads();
+          });
+        } catch (e) {
+          task.status = 'failed';
+          task.error = 'Finalizing file failed: ' + e.message;
+          activeDownloadReqs.delete(task.id);
+          saveRemoteDownloads();
+        }
+      });
+    });
+
+    writeStream.on('error', (err) => {
+      task.status = 'failed';
+      task.error = 'Write error: ' + err.message;
+      activeDownloadReqs.delete(task.id);
+      saveRemoteDownloads();
+    });
+  });
+
+  req.on('error', (err) => {
+    if (task.status === 'paused' || task.status === 'canceled') return;
+    task.status = 'failed';
+    task.error = 'Network error: ' + err.message;
+    activeDownloadReqs.delete(task.id);
+    saveRemoteDownloads();
+  });
+
+  activeDownloadReqs.set(task.id, { req, task });
+}
+
+// GET /api/remote-downloads
+app.get('/api/remote-downloads', rateLimitAuth, auth, (req, res) => {
+  res.json({
+    downloads: remoteDownloads.map(d => ({
+      id: d.id,
+      url: d.url,
+      driveId: d.driveId,
+      driveName: d.driveName,
+      folder: d.folder,
+      filename: d.filename,
+      status: d.status,
+      totalBytes: d.totalBytes,
+      downloadedBytes: d.downloadedBytes,
+      speed: d.speed || 0,
+      percent: d.percent || 0,
+      eta: d.eta || 0,
+      resumable: d.resumable,
+      expectedHash: d.expectedHash,
+      sha256: d.sha256,
+      hashMatched: d.hashMatched,
+      error: d.error,
+      createdAt: d.createdAt,
+      completedAt: d.completedAt
+    }))
+  });
+});
+
+// POST /api/remote-downloads
+app.post('/api/remote-downloads', rateLimitAuth, auth, async (req, res) => {
+  try {
+    const { url, driveId, folder = '/', filename, expectedHash } = req.body || {};
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ error: 'Valid URL is required' });
+    }
+
+    // Validate SSRF first
+    const parsedUrl = await validateUrlForSsrf(url);
+
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Target drive not found' });
+
+    // Validate safe path
+    let destDir;
+    try {
+      destDir = safePath(drive.mount, folder);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid destination directory: ' + e.message });
+    }
+    fs.mkdirSync(destDir, { recursive: true });
+
+    // Determine filename
+    let finalName = (filename || '').trim();
+    if (!finalName) {
+      const urlPath = parsedUrl.pathname.replace(/\/+$/, '');
+      finalName = path.basename(urlPath) || 'download';
+      if (!path.extname(finalName) && urlPath.includes('.')) {
+        finalName = 'download';
+      }
+    }
+    // Sanitize filename
+    finalName = finalName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+
+    const targetFile = path.join(destDir, finalName);
+    const partFile = `${targetFile}.part`;
+
+    const taskId = `dl_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const task = {
+      id: taskId,
+      url: parsedUrl.toString(),
+      driveId: drive.id,
+      driveName: drive.name,
+      folder: folder,
+      filename: finalName,
+      destDir: destDir,
+      targetFile: targetFile,
+      partFile: partFile,
+      status: 'pending',
+      totalBytes: 0,
+      downloadedBytes: 0,
+      speed: 0,
+      percent: 0,
+      eta: 0,
+      resumable: false,
+      expectedHash: (expectedHash || '').trim() || null,
+      sha256: null,
+      hashMatched: null,
+      error: null,
+      createdAt: Date.now()
+    };
+
+    remoteDownloads.unshift(task);
+    saveRemoteDownloads();
+
+    startDownloadTask(task);
+
+    res.json({ success: true, download: task });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/remote-downloads/:id/pause
+app.post('/api/remote-downloads/:id/pause', rateLimitAuth, auth, (req, res) => {
+  const task = remoteDownloads.find(d => d.id === req.params.id);
+  if (!task) return res.status(404).json({ error: 'Download task not found' });
+
+  const active = activeDownloadReqs.get(task.id);
+  if (active && active.req) {
+    try { active.req.destroy(); } catch (_) {}
+    activeDownloadReqs.delete(task.id);
+  }
+
+  task.status = 'paused';
+  task.speed = 0;
+  task.eta = 0;
+  saveRemoteDownloads();
+
+  res.json({ success: true, status: 'paused' });
+});
+
+// POST /api/remote-downloads/:id/resume
+app.post('/api/remote-downloads/:id/resume', rateLimitAuth, auth, (req, res) => {
+  const task = remoteDownloads.find(d => d.id === req.params.id);
+  if (!task) return res.status(404).json({ error: 'Download task not found' });
+
+  if (task.status === 'downloading') {
+    return res.json({ success: true, status: 'already downloading' });
+  }
+
+  startDownloadTask(task);
+  saveRemoteDownloads();
+
+  res.json({ success: true, status: 'resumed' });
+});
+
+// DELETE /api/remote-downloads/:id
+app.delete('/api/remote-downloads/:id', rateLimitAuth, auth, (req, res) => {
+  const idx = remoteDownloads.findIndex(d => d.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'Download task not found' });
+
+  const task = remoteDownloads[idx];
+  const active = activeDownloadReqs.get(task.id);
+  if (active && active.req) {
+    try { active.req.destroy(); } catch (_) {}
+    activeDownloadReqs.delete(task.id);
+  }
+
+  if (req.query.deleteFile === 'true') {
+    try { if (fs.existsSync(task.partFile)) fs.unlinkSync(task.partFile); } catch (_) {}
+    try { if (fs.existsSync(task.targetFile)) fs.unlinkSync(task.targetFile); } catch (_) {}
+  }
+
+  remoteDownloads.splice(idx, 1);
+  saveRemoteDownloads();
+
+  res.json({ success: true });
+});
+
+/* ─────────────────────────────────────────────
+   QUICKDROP — PHONE-TO-CLOUD TRANSFER
+   ───────────────────────────────────────────── */
+const quickDropsFile = path.join(__dirname, 'quickdrops.json');
+let quickDropSessions = new Map();
+
+function loadQuickDrops() {
+  try {
+    if (fs.existsSync(quickDropsFile)) {
+      const arr = JSON.parse(fs.readFileSync(quickDropsFile, 'utf8'));
+      const now = Date.now();
+      for (const item of arr) {
+        if (item.expiresAt > now) {
+          quickDropSessions.set(item.token, item);
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+function saveQuickDrops() {
+  try {
+    const arr = Array.from(quickDropSessions.values());
+    fs.writeFileSync(quickDropsFile, JSON.stringify(arr, null, 2), 'utf8');
+  } catch (_) {}
+}
+
+loadQuickDrops();
+
+// Multer storage for QuickDrop uploads
+const quickDropMulterStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const session = quickDropSessions.get(req.params.token);
+    if (!session) return cb(new Error('Invalid or expired QuickDrop session'));
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === session.driveId);
+    if (!drive) return cb(new Error('Destination drive is disconnected'));
+    const dest = safePath(drive.mount, session.folder);
+    fs.mkdirSync(dest, { recursive: true });
+    cb(null, dest);
+  },
+  filename: (req, file, cb) => {
+    const session = quickDropSessions.get(req.params.token);
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === session?.driveId);
+    const dest = drive ? safePath(drive.mount, session.folder) : '/tmp';
+
+    let name = file.originalname;
+    const parsedName = path.parse(name);
+    let target = path.join(dest, name);
+    let counter = 1;
+    while (fs.existsSync(target)) {
+      name = `${parsedName.name} (${counter})${parsedName.ext}`;
+      target = path.join(dest, name);
+      counter++;
+    }
+    cb(null, name);
+  }
+});
+
+const quickDropUpload = multer({
+  storage: quickDropMulterStorage,
+  limits: { fileSize: 20 * 1024 * 1024 * 1024 } // 20 GB limit
+});
+
+// POST /api/quickdrop/create (authenticated)
+app.post('/api/quickdrop/create', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, folder = '/', expiryMinutes = 60, maxFiles } = req.body || {};
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const dest = safePath(drive.mount, folder);
+    fs.mkdirSync(dest, { recursive: true });
+
+    const token = crypto.randomBytes(16).toString('hex');
+    const expiresAt = Date.now() + (parseInt(expiryMinutes, 10) || 60) * 60 * 1000;
+
+    const session = {
+      token,
+      driveId: drive.id,
+      driveName: drive.name,
+      folder: folder || '/',
+      createdAt: Date.now(),
+      expiresAt,
+      maxFiles: maxFiles ? parseInt(maxFiles, 10) : null,
+      uploadedCount: 0,
+      uploadedFiles: []
+    };
+
+    quickDropSessions.set(token, session);
+    saveQuickDrops();
+
+    res.json({
+      success: true,
+      token,
+      expiresAt,
+      driveName: drive.name,
+      folder: folder || '/'
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// GET /api/quickdrop/:token (public session lookup)
+app.get('/api/quickdrop/:token', (req, res) => {
+  const session = quickDropSessions.get(req.params.token);
+  if (!session) {
+    return res.status(404).json({ error: 'QuickDrop link not found or expired' });
+  }
+  if (Date.now() > session.expiresAt) {
+    quickDropSessions.delete(req.params.token);
+    saveQuickDrops();
+    return res.status(410).json({ error: 'QuickDrop link has expired' });
+  }
+  if (session.maxFiles && session.uploadedCount >= session.maxFiles) {
+    return res.status(403).json({ error: 'QuickDrop upload limit reached' });
+  }
+
+  res.json({
+    valid: true,
+    driveName: session.driveName,
+    folder: session.folder,
+    expiresAt: session.expiresAt,
+    uploadedCount: session.uploadedCount,
+    maxFiles: session.maxFiles
+  });
+});
+
+// GET /api/quickdrop/:token/status (authenticated host listener)
+app.get('/api/quickdrop/:token/status', rateLimitAuth, auth, (req, res) => {
+  const session = quickDropSessions.get(req.params.token);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  res.json({
+    active: Date.now() <= session.expiresAt,
+    uploadedCount: session.uploadedCount,
+    uploadedFiles: session.uploadedFiles,
+    expiresAt: session.expiresAt
+  });
+});
+
+// POST /api/quickdrop/:token/upload (public upload handler)
+app.post('/api/quickdrop/:token/upload', (req, res) => {
+  const session = quickDropSessions.get(req.params.token);
+  if (!session || Date.now() > session.expiresAt) {
+    return res.status(410).json({ error: 'QuickDrop session expired' });
+  }
+  if (session.maxFiles && session.uploadedCount >= session.maxFiles) {
+    return res.status(403).json({ error: 'Upload limit reached for this session' });
+  }
+
+  quickDropUpload.array('files', 50)(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    const uploadedList = (req.files || []).map(f => ({
+      name: f.originalname,
+      size: formatSize(f.size),
+      time: new Date().toLocaleTimeString()
+    }));
+
+    session.uploadedCount += uploadedList.length;
+    session.uploadedFiles.push(...uploadedList);
+    saveQuickDrops();
+
+    res.json({
+      success: true,
+      count: uploadedList.length,
+      files: uploadedList
+    });
+  });
+});
+
+
 

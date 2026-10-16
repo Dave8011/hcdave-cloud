@@ -10,6 +10,9 @@ import { SettingsModal }    from './components/SettingsModal';
 import { GlobalSearchModal }  from './components/GlobalSearchModal';
 import { FilePreviewModal }   from './components/FilePreviewModal';
 import { SharePage }        from './components/SharePage';
+import { RemoteDownloadModal } from './components/RemoteDownloadModal';
+import { QuickDropModal }      from './components/QuickDropModal';
+import { QuickDropPage }       from './components/QuickDropPage';
 import { StorageService }   from './services/api';
 import { ErrorBoundary }    from './components/ErrorBoundary';
 
@@ -22,6 +25,7 @@ import { ErrorBoundary }    from './components/ErrorBoundary';
 */
 export default function App() {
   const isShareLink = window.location.pathname.startsWith('/s/');
+  const isQuickDropLink = window.location.pathname.startsWith('/drop/');
   const [screen,       setScreen]      = useState('intro'); // always start with intro
   const [flashTarget,  setFlashTarget] = useState(null);    // where to go after flash
   const [drives,        setDrives]     = useState([]);
@@ -34,6 +38,8 @@ export default function App() {
   const [showUpload,   setShowUpload]  = useState(false);
   const [showNewFolder,setShowNewFolder] = useState(false);
   const [showSettings, setShowSettings]= useState(false);
+  const [showRemoteDownload, setShowRemoteDownload] = useState(false);
+  const [showQuickDrop, setShowQuickDrop]           = useState(false);
   const [isSidebarOpen, setIsSidebarOpen]= useState(false);
   const [driveStats, setDriveStats]     = useState([]);
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
@@ -146,7 +152,7 @@ export default function App() {
           const data = await StorageService.getScannerToken();
           console.log('[Scanner] token received:', !!(data && data.token));
           if (data && data.token) {
-            scannerWindow.postMessage({ type: 'AUTH_TOKEN', token: data.token }, targetOrigin);
+            scannerWindow.postMessage({ type: 'AUTH_TOKEN', token: data.token, returnUrl: window.location.origin }, targetOrigin);
             console.log('[Scanner] AUTH_TOKEN sent');
           } else {
             throw new Error('No token returned');
@@ -168,7 +174,8 @@ export default function App() {
     window.addEventListener('message', messageListener);
     console.log('[Scanner] message listener attached');
 
-    scannerWindow = window.open(targetOrigin, '_blank');
+    const scannerUrl = `${targetOrigin}?returnUrl=${encodeURIComponent(window.location.origin)}`;
+    scannerWindow = window.open(scannerUrl, '_blank');
     console.log('[Scanner] window opened:', !!scannerWindow);
     
     if (!scannerWindow || scannerWindow.closed || typeof scannerWindow.closed === 'undefined') {
@@ -190,9 +197,10 @@ export default function App() {
   if (screen === 'intro') {
     return (
       <IntroAnimation
-        fast={isShareLink}
+        fast={isShareLink || isQuickDropLink}
         onDone={() => {
           if (isShareLink) setScreen('share');
+          else if (isQuickDropLink) setScreen('drop');
           else setScreen(StorageService.isLoggedIn() ? 'app' : 'login');
         }}
       />
@@ -231,6 +239,12 @@ export default function App() {
   if (screen === 'share') {
     const token = window.location.pathname.split('/s/')[1];
     return <SharePage token={token} onGoHome={() => { window.history.pushState({}, '', '/'); setScreen('login'); }} />;
+  }
+
+  /* ── QuickDrop Mobile Page ── */
+  if (screen === 'drop') {
+    const token = window.location.pathname.split('/drop/')[1];
+    return <QuickDropPage token={token} onGoHome={() => { window.history.pushState({}, '', '/'); setScreen('login'); }} />;
   }
 
   /* ── Main App ── */
@@ -291,6 +305,8 @@ export default function App() {
         onOpenBackup={() => setShowSettings('backup')}
         onOpenTrash={() => setShowSettings('trash')}
         onOpenTerminal={() => setShowSettings('terminal')}
+        onOpenRemoteDownload={() => setShowRemoteDownload(true)}
+        onOpenQuickDrop={() => setShowQuickDrop(true)}
       />
 
       <main className="main-content">
@@ -304,6 +320,8 @@ export default function App() {
           onScan={handleScanOpen}
           onSettings={() => setShowSettings('dashboard')}
           onLogout={handleLogout}
+          onQuickDrop={() => setShowQuickDrop(true)}
+          onCloudDownload={() => setShowRemoteDownload(true)}
         />
 
         <FileExplorer
@@ -368,6 +386,32 @@ export default function App() {
             onClose={() => setPreviewSearchFile(null)}
             onDelete={() => { setPreviewSearchFile(null); loadFiles(); }}
             activeDrive={drives.find(d => d.id === previewSearchFile.driveId) || activeDrive}
+          />
+        </ErrorBoundary>
+      )}
+
+      {showRemoteDownload && (
+        <ErrorBoundary>
+          <RemoteDownloadModal
+            isOpen={showRemoteDownload}
+            onClose={() => setShowRemoteDownload(false)}
+            drives={drives}
+            activeDriveId={activeDriveId}
+            currentPath={currentPath}
+            onDownloadStarted={() => { loadFiles(); }}
+          />
+        </ErrorBoundary>
+      )}
+
+      {showQuickDrop && (
+        <ErrorBoundary>
+          <QuickDropModal
+            isOpen={showQuickDrop}
+            onClose={() => setShowQuickDrop(false)}
+            drives={drives}
+            activeDriveId={activeDriveId}
+            currentPath={currentPath}
+            onFilesReceived={() => { loadFiles(); }}
           />
         </ErrorBoundary>
       )}

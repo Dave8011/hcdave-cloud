@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, UploadCloud, Settings, LogOut, Menu, Camera } from 'lucide-react';
+import { Search, UploadCloud, Settings, LogOut, Menu, Camera, QrCode, DownloadCloud } from 'lucide-react';
 
 export function TopBar({
   search,
@@ -10,7 +10,9 @@ export function TopBar({
   onLogout,
   onMenuToggle,
   onScan,
-  onOpenSearch
+  onOpenSearch,
+  onQuickDrop,
+  onCloudDownload
 }) {
   return (
     <div className="top-bar">
@@ -60,6 +62,20 @@ export function TopBar({
       </div>
 
       <div className="top-actions">
+        {onQuickDrop && (
+          <button className="btn btn-ghost" onClick={onQuickDrop} title="QuickDrop — Phone to Cloud Transfer">
+            <QrCode size={16} color="var(--emerald)" />
+            <span className="hide-mobile">QuickDrop</span>
+          </button>
+        )}
+
+        {onCloudDownload && (
+          <button className="btn btn-ghost" onClick={onCloudDownload} title="Direct-to-Cloud Remote Downloader">
+            <DownloadCloud size={16} color="var(--cyan)" />
+            <span className="hide-mobile">Remote DL</span>
+          </button>
+        )}
+
         <button className="btn btn-ghost" onClick={onSettings}>
           <Settings size={16} />
           <span className="hide-mobile">Config</span>

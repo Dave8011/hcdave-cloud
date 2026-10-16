@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   HardDrive, Cpu, Folder, ShieldCheck, Wifi, PlugZap, Database,
-  Activity, Archive, Trash2, Terminal, Search, ExternalLink
+  Activity, Archive, Trash2, Terminal, Search, ExternalLink, DownloadCloud, QrCode
 } from 'lucide-react';
 
 export function Sidebar({
@@ -17,7 +17,9 @@ export function Sidebar({
   onOpenBackup,
   onOpenTrash,
   onOpenTerminal,
-  onOpenSearch
+  onOpenSearch,
+  onOpenRemoteDownload,
+  onOpenQuickDrop
 }) {
   return (
     <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}>
@@ -247,6 +249,30 @@ export function Sidebar({
             >
               <Activity size={17} color="var(--cyan)" />
               <span>Health Dashboard</span>
+            </div>
+          )}
+
+          {/* QuickDrop Phone-to-Cloud */}
+          {onOpenQuickDrop && (
+            <div
+              className="nav-item"
+              onClick={onOpenQuickDrop}
+              title="QuickDrop — Phone to Cloud Camera &amp; File Transfer"
+            >
+              <QrCode size={17} color="var(--emerald)" />
+              <span>QuickDrop</span>
+            </div>
+          )}
+
+          {/* Direct-to-Cloud Remote Downloader */}
+          {onOpenRemoteDownload && (
+            <div
+              className="nav-item"
+              onClick={onOpenRemoteDownload}
+              title="Direct-to-Cloud Remote Downloader"
+            >
+              <DownloadCloud size={17} color="var(--cyan)" />
+              <span>Cloud Downloader</span>
             </div>
           )}
 
