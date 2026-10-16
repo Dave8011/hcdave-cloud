@@ -137,15 +137,53 @@ export class StorageService {
   }
 
 
-  // POST /api/upload — upload a file with real progress
+  // GET /api/system-health — live detailed server health
+  static async getSystemHealth() {
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/api/system-health`, { headers: this.headers() });
+      if (!r.ok) throw new Error();
+      return await r.json();
+    } catch {
+      return null;
+    }
+  }
+
+  // GET /api/upload-status — check existing chunks for resumable uploads
+  static async getUploadStatus(uploadId, driveId, totalChunks) {
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/api/upload-status?uploadId=${encodeURIComponent(uploadId)}&driveId=${encodeURIComponent(driveId)}&totalChunks=${totalChunks}`, {
+        headers: this.headers()
+      });
+      if (r.ok) return await r.json();
+    } catch (_) {}
+    return { existingChunks: [] };
+  }
+
+  // POST /api/upload — upload a file with real progress & resume support
   static uploadFile(driveId, file, uploadPath = '/', onProgress) {
     const CHUNK_SIZE   = 50 * 1024 * 1024; // 50 MB per chunk
     const totalChunks  = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-    const uploadId     = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    // Consistent deterministic uploadId for resuming interrupted uploads
+    const rawId = `${file.name}-${file.size}-${uploadPath}`;
+    let hash = 0;
+    for (let c = 0; c < rawId.length; c++) hash = ((hash << 5) - hash) + rawId.charCodeAt(c) | 0;
+    const uploadId = 'up-' + Math.abs(hash).toString(36) + '-' + file.size.toString(36);
 
     return new Promise(async (resolve, reject) => {
       try {
+        const status = await this.getUploadStatus(uploadId, driveId, totalChunks);
+        const existingChunks = new Set(status.existingChunks || []);
+
         for (let i = 0; i < totalChunks; i++) {
+          if (existingChunks.has(i)) {
+            if (onProgress) {
+              const loadedBytes = Math.min((i + 1) * CHUNK_SIZE, file.size);
+              const overall = Math.round(((i + 1) / totalChunks) * 100);
+              onProgress(overall, loadedBytes);
+            }
+            continue;
+          }
+
           const start  = i * CHUNK_SIZE;
           const end    = Math.min(start + CHUNK_SIZE, file.size);
           const chunk  = file.slice(start, end);
@@ -163,7 +201,6 @@ export class StorageService {
             const xhr = new XMLHttpRequest();
             xhr.upload.onprogress = (e) => {
               if (e.lengthComputable && onProgress) {
-                // Combine completed chunks + progress within current chunk
                 const overall = Math.round(((i + e.loaded / e.total) / totalChunks) * 100);
                 const loadedBytes = (i * CHUNK_SIZE) + e.loaded;
                 onProgress(overall, loadedBytes);
@@ -212,15 +249,28 @@ export class StorageService {
   }
 
   // POST /api/move
-  static async moveFiles(driveId, paths, destPath) {
+  static async moveFiles(driveId, paths, destPath, targetDriveId) {
     if (!driveId || !paths || !paths.length || !destPath) throw new Error('Missing parameters');
     const r = await fetch(`${this.getAgentUrl()}/api/move`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ driveId, paths, destPath })
+      body: JSON.stringify({ driveId, paths, destPath, targetDriveId: targetDriveId || driveId })
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed to move');
+    return data;
+  }
+
+  // POST /api/copy — fast same-drive or cross-drive copy
+  static async copyFiles(sourceDriveId, targetDriveId, paths, destPath) {
+    if (!sourceDriveId || !paths || !paths.length || !destPath) throw new Error('Missing parameters');
+    const r = await fetch(`${this.getAgentUrl()}/api/copy`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ sourceDriveId, targetDriveId: targetDriveId || sourceDriveId, paths, destPath })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to copy');
     return data;
   }
 
@@ -236,7 +286,7 @@ export class StorageService {
     return data;
   }
 
-  // POST /api/delete — delete single or multiple files/folders
+  // POST /api/delete — delete single or multiple files/folders permanently
   static async deleteFiles(driveId, paths) {
     const pathList = Array.isArray(paths) ? paths : [paths];
     const r = await fetch(`${this.getAgentUrl()}/api/delete`, {
@@ -249,9 +299,92 @@ export class StorageService {
     return data;
   }
 
-  // POST /api/share
-  static async createShareLink(driveId, filePathOrPaths, burnAfterReading) {
-    const payload = { driveId, burnAfterReading };
+  // ── Recycle Bin (Trash) ──────────────────────────────────────
+  static async sendToTrash(driveId, paths) {
+    const pathList = Array.isArray(paths) ? paths : [paths];
+    const r = await fetch(`${this.getAgentUrl()}/api/trash/send`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, paths: pathList })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to move to recycle bin');
+    return data;
+  }
+
+  static async listTrash(driveId) {
+    if (!driveId) return [];
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/api/trash?driveId=${encodeURIComponent(driveId)}`, {
+        headers: this.headers()
+      });
+      if (!r.ok) return [];
+      return await r.json();
+    } catch {
+      return [];
+    }
+  }
+
+  static async restoreTrash(driveId, trashPaths) {
+    const r = await fetch(`${this.getAgentUrl()}/api/trash/restore`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, trashPaths: Array.isArray(trashPaths) ? trashPaths : [trashPaths] })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to restore file(s)');
+    return data;
+  }
+
+  static async deleteTrash(driveId, trashPaths) {
+    const r = await fetch(`${this.getAgentUrl()}/api/trash/delete`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, trashPaths: Array.isArray(trashPaths) ? trashPaths : [trashPaths] })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to permanently delete');
+    return data;
+  }
+
+  static async emptyTrash(driveId) {
+    const r = await fetch(`${this.getAgentUrl()}/api/trash/empty`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to empty recycle bin');
+    return data;
+  }
+
+  // ── File Version History ────────────────────────────────────
+  static async listVersions(driveId, path) {
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/api/versions?driveId=${encodeURIComponent(driveId)}&path=${encodeURIComponent(path)}`, {
+        headers: this.headers()
+      });
+      if (!r.ok) return [];
+      return await r.json();
+    } catch {
+      return [];
+    }
+  }
+
+  static async restoreVersion(driveId, path, versionId) {
+    const r = await fetch(`${this.getAgentUrl()}/api/versions/restore`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ driveId, path, versionId })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to restore version');
+    return data;
+  }
+
+  // ── Secure File Sharing ─────────────────────────────────────
+  static async createShareLink(driveId, filePathOrPaths, burnAfterReading, options = {}) {
+    const payload = { driveId, burnAfterReading, ...options };
     if (Array.isArray(filePathOrPaths)) {
       payload.filePaths = filePathOrPaths;
     } else {
@@ -267,17 +400,98 @@ export class StorageService {
     return data;
   }
 
-  // PUT /api/share/:token
-  static async updateShareLink(token, burnAfterReading) {
+  static async updateShareLink(token, updates = {}) {
     const r = await fetch(`${this.getAgentUrl()}/api/share/${token}`, {
       method: 'PUT',
       headers: this.headers(),
-      body: JSON.stringify({ burnAfterReading })
+      body: JSON.stringify(updates)
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed to update share link');
     return data;
   }
+
+  static async listShares() {
+    try {
+      const r = await fetch(`${this.getAgentUrl()}/api/shares`, { headers: this.headers() });
+      if (!r.ok) return [];
+      return await r.json();
+    } catch {
+      return [];
+    }
+  }
+
+  static async revokeShare(token) {
+    const r = await fetch(`${this.getAgentUrl()}/api/share/${token}`, {
+      method: 'DELETE',
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to revoke link');
+    return data;
+  }
+
+  static async verifySharePassword(token, password) {
+    const r = await fetch(`${this.getAgentUrl()}/api/s/${token}/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Incorrect password');
+    return data;
+  }
+
+  // ── Backup System ───────────────────────────────────────────
+  static async getBackupStatus() {
+    const r = await fetch(`${this.getAgentUrl()}/api/backup/status`, { headers: this.headers() });
+    if (!r.ok) throw new Error('Backup status unavailable');
+    return r.json();
+  }
+
+  static async startBackup(sourceDriveId, destDriveId, schedTime) {
+    const r = await fetch(`${this.getAgentUrl()}/api/backup/start`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ sourceDriveId, destDriveId, schedTime })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to start backup');
+    return data;
+  }
+
+  static async stopBackup() {
+    const r = await fetch(`${this.getAgentUrl()}/api/backup/stop`, {
+      method: 'POST',
+      headers: this.headers()
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to stop backup');
+    return data;
+  }
+
+  static async restoreBackup(archivePath, targetDriveId) {
+    const r = await fetch(`${this.getAgentUrl()}/api/backup/restore`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ archivePath, targetDriveId })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to restore backup');
+    return data;
+  }
+
+  static async setBackupSchedule(enabled, startTime, sourceDriveId, destDriveId) {
+    const r = await fetch(`${this.getAgentUrl()}/api/backup/schedule`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ enabled, startTime, sourceDriveId, destDriveId })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to update schedule');
+    return data;
+  }
+
 
   // POST /api/update
   static async updateAgent() {

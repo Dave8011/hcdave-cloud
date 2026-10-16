@@ -243,9 +243,13 @@ export default function App() {
         onCacheDrive={async (driveId) => {
           try {
             await StorageService.startCache([driveId]);
-            setShowSettings(true);
+            setShowSettings('cache');
           } catch (e) { alert('Cache error: ' + e.message); }
         }}
+        onOpenDashboard={() => setShowSettings('dashboard')}
+        onOpenBackup={() => setShowSettings('backup')}
+        onOpenTrash={() => setShowSettings('trash')}
+        onOpenTerminal={() => setShowSettings('terminal')}
       />
 
       <main className="main-content">
@@ -256,7 +260,7 @@ export default function App() {
           onUpload={() => setShowUpload(true)}
           onNewFolder={() => setShowNewFolder(true)}
           onScan={handleScanOpen}
-          onSettings={() => setShowSettings(true)}
+          onSettings={() => setShowSettings('dashboard')}
           onLogout={handleLogout}
         />
 
@@ -264,6 +268,7 @@ export default function App() {
           files={files}
           isLoading={isLoading}
           activeDrive={activeDrive || { id: activeDriveId, name: 'Drive' }}
+          drives={drives}
           currentPath={currentPath}
           setCurrentPath={(p) => { setCurrentPath(p); setSearch(''); }}
           onRefresh={loadFiles}
@@ -291,6 +296,7 @@ export default function App() {
       {showSettings && (
         <ErrorBoundary>
           <SettingsModal
+            initialTab={typeof showSettings === 'string' ? showSettings : 'dashboard'}
             onClose={() => setShowSettings(false)}
             onSave={() => { loadDrives(); loadFiles(); }}
             drives={drives}

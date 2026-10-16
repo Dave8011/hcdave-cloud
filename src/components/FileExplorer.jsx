@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Folder, FileText, Image as Img, Film, Archive,
   Grid3X3, List, ChevronRight, HardDrive, Eye, FolderOpen, Share2, RefreshCw,
-  CheckCircle2, Circle, Download, X, Trash2, CheckSquare, AlertTriangle, Edit2, ArrowRightCircle, MoreVertical
+  CheckCircle2, Circle, Download, X, Trash2, CheckSquare, AlertTriangle, Edit2, ArrowRightCircle, MoreVertical, Copy
 } from 'lucide-react';
 import { ShareModal } from './ShareModal';
 import { MoveModal } from './MoveModal';
@@ -28,7 +28,7 @@ function formatSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, currentPath, setCurrentPath, onRefresh }) {
+export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, drives = [], currentPath, setCurrentPath, onRefresh }) {
   const [typeFilter, setTypeFilter] = useState('all');
   
   const files = React.useMemo(() => {
@@ -170,7 +170,8 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await StorageService.deleteFiles(activeDrive.id, deleteModal.paths);
+      // Move to recycle bin instead of permanent delete
+      await StorageService.sendToTrash(activeDrive.id, deleteModal.paths);
       setDeleteModal(null);
       clearSelection();
       if (onRefresh) onRefresh();
@@ -179,6 +180,12 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
     } finally {
       setIsDeleting(false);
     }
+  };
+
+  // Copy files (same-drive or cross-drive handled in MoveModal)
+  const promptSingleCopy = (file, e) => {
+    if (e) e.stopPropagation();
+    setMoveModal({ paths: [file.path], defaultMode: 'copy' });
   };
 
   const pathParts = currentPath === '/' ? [] : currentPath.split('/').filter(Boolean);
@@ -322,7 +329,8 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                           <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); setPreviewFile(file); }}><Eye size={14}/> Preview</button>
                           <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleRename(file, e); }}><Edit2 size={14}/> Rename</button>
                           <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleMove(file, e); }}><ArrowRightCircle size={14}/> Move</button>
-                          <button className="dropdown-item danger" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleDelete(file, e); }}><Trash2 size={14}/> Delete</button>
+                          <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleCopy(file, e); }}><Copy size={14}/> Copy</button>
+                          <button className="dropdown-item danger" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleDelete(file, e); }}><Trash2 size={14}/> Trash</button>
                         </div>
                       )}
                     </div>
@@ -413,7 +421,8 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                         <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); setPreviewFile(file); }}><Eye size={14}/> Preview</button>
                         <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleRename(file, e); }}><Edit2 size={14}/> Rename</button>
                         <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleMove(file, e); }}><ArrowRightCircle size={14}/> Move</button>
-                        <button className="dropdown-item danger" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleDelete(file, e); }}><Trash2 size={14}/> Delete</button>
+                        <button className="dropdown-item" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleCopy(file, e); }}><Copy size={14}/> Copy</button>
+                        <button className="dropdown-item danger" onClick={(e) => { e.stopPropagation(); setActiveMenuId(null); promptSingleDelete(file, e); }}><Trash2 size={14}/> Trash</button>
                       </div>
                     )}
                   </div>
@@ -453,7 +462,7 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
             </div>
 
             <p style={{ fontSize: '0.88rem', color: 'var(--text-2)', margin: '12px 0 16px 0', lineHeight: 1.5 }}>
-              Are you sure you want to permanently delete the following item(s) from drive <strong>{activeDrive?.name}</strong>? This action cannot be undone.
+              Move the following item(s) to the <strong>Recycle Bin</strong> on <strong>{activeDrive?.name}</strong>? You can restore them anytime from Settings → Recycle Bin.
             </p>
 
             <div style={{
@@ -515,12 +524,12 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
                 {isDeleting ? (
                   <>
                     <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} />
-                    Deleting...
+                    Moving to Bin...
                   </>
                 ) : (
                   <>
                     <Trash2 size={15} />
-                    Delete Permanently
+                    Move to Recycle Bin
                   </>
                 )}
               </button>
@@ -610,6 +619,7 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, cur
       {moveModal && (
         <MoveModal
           activeDrive={activeDrive}
+          drives={drives}
           pathsToMove={moveModal.paths}
           onClose={() => setMoveModal(null)}
           onComplete={() => { setMoveModal(null); clearSelection(); onRefresh(); }}

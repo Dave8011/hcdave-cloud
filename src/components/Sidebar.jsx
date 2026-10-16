@@ -1,7 +1,7 @@
 import React from 'react';
-import { HardDrive, Cpu, Folder, ShieldCheck, Wifi, PlugZap, Database } from 'lucide-react';
+import { HardDrive, Cpu, Folder, ShieldCheck, Wifi, PlugZap, Database, Activity, Archive, Trash2, Terminal } from 'lucide-react';
 
-export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, setActiveTab, isOpen, onCacheDrive, driveStats }) {
+export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, setActiveTab, isOpen, onCacheDrive, driveStats, onOpenDashboard, onOpenBackup, onOpenTrash, onOpenTerminal }) {
   return (
     <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`}>
       <div>
@@ -107,7 +107,7 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
         </div>
 
         {/* Navigation */}
-        <div className="section-label" style={{ marginTop: 8 }}>Browse</div>
+        <div className="section-label" style={{ marginTop: 8 }}>Tools &amp; Management</div>
         <nav className="nav-menu">
           <div
             className={`nav-item ${activeTab === 'all' ? 'active' : ''}`}
@@ -116,11 +116,56 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
             <Folder size={17} />
             <span>All Files</span>
           </div>
+          {onOpenDashboard && (
+            <div
+              className="nav-item"
+              onClick={onOpenDashboard}
+              title="Live Server Health Dashboard"
+            >
+              <Activity size={17} color="var(--cyan)" />
+              <span>Health Dashboard</span>
+            </div>
+          )}
+          {onOpenBackup && (
+            <div
+              className="nav-item"
+              onClick={onOpenBackup}
+              title="Automatic Drive Compression Backup"
+            >
+              <Archive size={17} color="var(--violet)" />
+              <span>Drive Backups</span>
+            </div>
+          )}
+          {onOpenTrash && (
+            <div
+              className="nav-item"
+              onClick={onOpenTrash}
+              title="Recycle Bin &amp; File Recovery"
+            >
+              <Trash2 size={17} color="var(--rose)" />
+              <span>Recycle Bin</span>
+            </div>
+          )}
+          {onOpenTerminal && (
+            <div
+              className="nav-item"
+              onClick={onOpenTerminal}
+              title="Administrator Terminal"
+            >
+              <Terminal size={17} color="var(--emerald)" />
+              <span>Terminal</span>
+            </div>
+          )}
         </nav>
       </div>
 
       {/* Connection status */}
-      <div className="conn-pill">
+      <div
+        className="conn-pill"
+        onClick={onOpenDashboard}
+        style={{ cursor: onOpenDashboard ? 'pointer' : 'default' }}
+        title="Click to view Live Server Health"
+      >
         <div className="flex items-center">
           <div className="conn-dot" />
           <span className="conn-label">Cloudflare Active</span>
@@ -130,3 +175,4 @@ export function Sidebar({ drives, activeDriveId, setActiveDriveId, activeTab, se
     </aside>
   );
 }
+

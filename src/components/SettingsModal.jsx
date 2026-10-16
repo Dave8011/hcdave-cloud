@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database, HardDrive, Edit2, AlertTriangle, Monitor } from 'lucide-react';
+import { X, Globe, Check, ShieldCheck, RefreshCw, Activity, Cpu, Clock, Database, HardDrive, Edit2, AlertTriangle, Monitor, Server, Archive, Trash2 } from 'lucide-react';
 import { StorageService } from '../services/api';
 import { CachePanel } from './CachePanel';
 import { TerminalPanel } from './TerminalPanel';
+import { SystemHealthPanel } from './SystemHealthPanel';
+import { BackupPanel } from './BackupPanel';
+import { RecycleBinPanel } from './RecycleBinPanel';
 
 
-export function SettingsModal({ onClose, onSave, drives }) {
-  const [tab, setTab]               = useState('connection'); // 'connection' | 'cache' | 'drives'
+export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard' }) {
+  const [tab, setTab]               = useState(initialTab); // 'dashboard' | 'connection' | 'cache' | 'drives' | 'backup' | 'trash'
   const [agentUrl, setAgentUrl]     = useState(StorageService.getAgentUrl());
   const [saved, setSaved]           = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -140,10 +143,13 @@ export function SettingsModal({ onClose, onSave, drives }) {
   };
 
   const TABS = [
+    { key: 'dashboard', label: 'Dashboard',  Icon: Server },
     { key: 'connection', label: 'Connection', Icon: Globe },
     { key: 'drives',     label: 'Drives',     Icon: HardDrive },
     { key: 'cache',      label: 'Video Cache', Icon: Database, badge: cacheWarn },
-    { key: 'terminal',   label: '🖥 Terminal',  Icon: Monitor },
+    { key: 'backup',     label: 'Backup',     Icon: Archive },
+    { key: 'trash',      label: 'Recycle Bin', Icon: Trash2 },
+    { key: 'terminal',   label: 'Terminal',   Icon: Monitor },
   ];
 
   return (
@@ -169,7 +175,7 @@ export function SettingsModal({ onClose, onSave, drives }) {
         </div>
       )}
 
-      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: (tab === 'terminal' || tab === 'dashboard' || tab === 'backup') ? 650 : 540, transition: 'max-width 0.2s ease' }}>
         <div className="modal-title-row">
           <div className="modal-title">Settings</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4, display: 'flex' }}>
@@ -178,20 +184,20 @@ export function SettingsModal({ onClose, onSave, drives }) {
         </div>
 
         {/* Tab Bar */}
-        <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: 4 }}>
+        <div style={{ display: 'flex', gap: 3, marginBottom: 20, background: 'rgba(0,0,0,0.2)', borderRadius: 8, padding: 4, overflowX: 'auto', flexShrink: 0 }}>
           {TABS.map(({ key, label, Icon, badge }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
               style={{
-                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                padding: '7px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600,
+                flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                padding: '6px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600,
                 background: tab === key ? 'var(--bg-card)' : 'transparent',
                 color: tab === key ? 'var(--text-1)' : 'var(--text-3)',
-                position: 'relative', transition: 'all 0.15s',
+                position: 'relative', transition: 'all 0.15s', whiteSpace: 'nowrap',
               }}
             >
-              <Icon size={13} />
+              <Icon size={12} />
               {label}
               {badge && (
                 <span style={{ position: 'absolute', top: 5, right: 8, width: 7, height: 7, borderRadius: '50%', background: 'var(--rose)' }} />
@@ -307,8 +313,18 @@ export function SettingsModal({ onClose, onSave, drives }) {
         {/* Cache Tab */}
         {tab === 'cache' && <CachePanel drives={drives} />}
 
+        {/* Dashboard Tab */}
+        {tab === 'dashboard' && <SystemHealthPanel />}
+
+        {/* Backup Tab */}
+        {tab === 'backup' && <BackupPanel drives={drives || []} />}
+
+        {/* Trash Tab */}
+        {tab === 'trash' && <RecycleBinPanel drives={drives || []} activeDriveId={drives?.[0]?.id} />}
+
         {/* Terminal Tab */}
         {tab === 'terminal' && <TerminalPanel />}
+
 
         {/* Drives Tab */}
         {tab === 'drives' && (

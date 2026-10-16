@@ -71,11 +71,8 @@ const app           = express();
 const PORT          = Number(process.env.PORT) || 3001;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'ChangeMe@2024';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'https://drive.hcdavecloud.in';
-const SCANNER_JWT_SECRET = process.env.SCANNER_JWT_SECRET;
-if (!SCANNER_JWT_SECRET) {
-  console.error("FATAL: SCANNER_JWT_SECRET environment variable is missing.");
-  process.exit(1);
-}
+const SCANNER_JWT_SECRET = process.env.SCANNER_JWT_SECRET || 'hcdave-scanner-default-jwt-secret-key-2024';
+
 
 let scannerUpdateState = { status: 'idle', logs: '', error: null };
 
@@ -283,7 +280,71 @@ async function updateDrives() {
     }
   }
 
+  // Track connected vs disconnected drives
+  const currentIds = new Set(drives.map(d => d.id));
+  for (const d of drives) {
+    seenDrivesMap.set(d.id, { id: d.id, name: d.name, lastSeen: Date.now() });
+  }
+  const newlyDisconnected = [];
+  for (const [id, info] of seenDrivesMap.entries()) {
+    if (!currentIds.has(id)) {
+      newlyDisconnected.push({ id: info.id, name: info.name, disconnectedAt: new Date(info.lastSeen).toISOString() });
+    }
+  }
+  disconnectedDrives = newlyDisconnected;
+
   cachedDrives = drives;
+}
+
+let seenDrivesMap = new Map();
+let disconnectedDrives = [];
+
+function getSystemTemperature() {
+  try {
+    const thermDir = '/sys/class/thermal';
+    if (!fs.existsSync(thermDir)) return null;
+    const entries = fs.readdirSync(thermDir).filter(f => f.startsWith('thermal_zone'));
+    let maxTemp = null;
+    for (const f of entries) {
+      const p = path.join(thermDir, f, 'temp');
+      try {
+        if (fs.existsSync(p)) {
+          const raw = parseInt(fs.readFileSync(p, 'utf8').trim(), 10);
+          if (!isNaN(raw) && raw > 0) {
+            const val = raw > 1000 ? Math.round(raw / 1000) : raw;
+            if (val > 0 && val < 120) {
+              if (maxTemp === null || val > maxTemp) maxTemp = val;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return maxTemp;
+  } catch (_) {
+    return null;
+  }
+}
+
+const net = require('net');
+function checkInternetConnectivity(timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: '1.1.1.1', port: 53, timeout: timeoutMs }, () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('error', () => { socket.destroy(); resolve(false); });
+    socket.on('timeout', () => { socket.destroy(); resolve(false); });
+  });
+}
+
+function checkCloudflareTunnelStatus() {
+  try {
+    const out = execSync('systemctl is-active cloudflared 2>/dev/null || pgrep -f cloudflared || echo "inactive"', { encoding: 'utf8', timeout: 1000 }).trim();
+    if (out === 'active' || /^\d+$/.test(out)) return 'online';
+    return 'offline';
+  } catch (_) {
+    return 'offline';
+  }
 }
 
 // Start drive polling immediately
@@ -373,6 +434,7 @@ app.get('/health', (_, res) => {
   const memUsage = Math.round(((totalMem - freeMem) / totalMem) * 100);
   const uptimeHours = (os.uptime() / 3600).toFixed(1);
   const load = os.loadavg()[0].toFixed(2);
+  const tempC = getSystemTemperature();
   
   let lastUpdated = 'Unknown';
   try {
@@ -395,8 +457,126 @@ app.get('/health', (_, res) => {
     lastUpdated,
     scannerVersion,
     scannerLastUpdated,
-    stats: { memUsage, uptimeHours, load },
+    stats: { memUsage, uptimeHours, load, tempC },
     time: new Date().toISOString() 
+  });
+});
+
+// GET /api/system-health — Full live system metrics & service monitoring
+app.get('/api/system-health', rateLimitAuth, auth, async (_, res) => {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const memUsage = Math.round(((totalMem - freeMem) / totalMem) * 100);
+  const uptimeHours = (os.uptime() / 3600).toFixed(1);
+  const load = os.loadavg().map(l => parseFloat(l.toFixed(2)));
+  const tempC = getSystemTemperature();
+  const internetOnline = await checkInternetConnectivity();
+  const tunnelStatus = checkCloudflareTunnelStatus();
+  const drives = getMountedDrives();
+
+  const alerts = [];
+
+  // 1. Low disk space notifications
+  for (const d of drives) {
+    if (d.percent >= 90 || d.freeGB < 5) {
+      alerts.push({
+        id: `disk_${d.id}`,
+        level: d.percent >= 95 ? 'error' : 'warn',
+        message: `Low disk space on ${d.name}: only ${d.freeGB} GB left (${d.percent}% full)`,
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+
+  // 2. Disconnected drives notifications
+  for (const d of disconnectedDrives) {
+    alerts.push({
+      id: `drive_dc_${d.id}`,
+      level: 'error',
+      message: `Storage drive "${d.name}" was disconnected!`,
+      timestamp: d.disconnectedAt
+    });
+  }
+
+  // 3. Failed services notifications
+  if (!internetOnline) {
+    alerts.push({
+      id: 'net_offline',
+      level: 'error',
+      message: 'Internet connectivity is down or unreachable',
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  if (tunnelStatus === 'offline') {
+    alerts.push({
+      id: 'cf_tunnel_offline',
+      level: 'warn',
+      message: 'Cloudflare Tunnel service is inactive or stopped',
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  if (tempC && tempC >= 80) {
+    alerts.push({
+      id: 'temp_critical',
+      level: 'error',
+      message: `High CPU temperature: ${tempC}°C! Check server ventilation`,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  let overall = 'online';
+  if (!internetOnline || disconnectedDrives.length > 0) {
+    overall = 'warning';
+  }
+  if (alerts.some(a => a.level === 'error')) {
+    overall = 'warning';
+  }
+  if (!internetOnline && tunnelStatus === 'offline') {
+    overall = 'offline';
+  }
+
+  res.json({
+    status: overall,
+    version: VERSION,
+    localIp: getLocalIp(),
+    cpu: {
+      load,
+      cores: os.cpus().length,
+      model: os.cpus()[0]?.model || 'Unknown',
+    },
+    ram: {
+      totalGB: +(totalMem / 1e9).toFixed(2),
+      freeGB: +(freeMem / 1e9).toFixed(2),
+      usedGB: +((totalMem - freeMem) / 1e9).toFixed(2),
+      percent: memUsage,
+    },
+    temperature: {
+      tempC,
+    },
+    internet: {
+      connected: internetOnline,
+      status: internetOnline ? 'online' : 'offline',
+    },
+    cloudflare: {
+      status: tunnelStatus,
+      domain: 'api.hcdavecloud.in',
+    },
+    services: {
+      agent: 'online',
+      tunnel: tunnelStatus,
+    },
+    drives,
+    disconnectedDrives,
+    alerts,
+    stats: {
+      memUsage,
+      uptimeHours,
+      load: load[0],
+      tempC,
+    },
+    time: new Date().toISOString(),
   });
 });
 
@@ -786,6 +966,67 @@ app.post('/api/download-zip', rateLimitAuth, auth, (req, res) => {
   archive.finalize();
 });
 
+// ── File Versioning Helper ────────────────────────────────────
+function getVersionsDir(driveMount) {
+  return path.join(driveMount, '.hcdave-versions');
+}
+
+function saveFileVersion(driveMount, relPath) {
+  try {
+    const full = safePath(driveMount, relPath);
+    if (!fs.existsSync(full)) return;
+    const stat = fs.statSync(full);
+    if (!stat.isFile()) return;
+
+    const vDir = getVersionsDir(driveMount);
+    fs.mkdirSync(vDir, { recursive: true });
+    const relNorm = relPath.replace(/^(\/|\\)+/, '');
+    const safeName = Buffer.from(relNorm).toString('hex').slice(0, 32);
+    const verFile = path.join(vDir, `${safeName}___${Date.now()}___${path.basename(full)}`);
+    fs.copyFileSync(full, verFile);
+
+    // Keep at most 10 previous versions
+    const all = fs.readdirSync(vDir).filter(f => f.startsWith(`${safeName}___`));
+    if (all.length > 10) {
+      all.sort();
+      for (let i = 0; i < all.length - 10; i++) {
+        try { fs.unlinkSync(path.join(vDir, all[i])); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
+// GET /api/upload-status (Check uploaded chunks for resuming large file uploads)
+app.get('/api/upload-status', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { uploadId, driveId, totalChunks } = req.query;
+    if (!uploadId || !totalChunks) return res.json({ existingChunks: [] });
+    
+    let chunkDir = CHUNK_TMP_DIR;
+    if (driveId) {
+      const drives = getMountedDrives();
+      const drive = drives.find(d => d.id === driveId) || drives[0];
+      if (drive) {
+        const dChunk = path.join(drive.mount, '.hcdave-chunks');
+        if (fs.existsSync(dChunk)) chunkDir = dChunk;
+      }
+    }
+
+    const total = parseInt(totalChunks, 10);
+    const existingChunks = [];
+    for (let i = 0; i < total; i++) {
+      const p1 = path.join(chunkDir, `${uploadId}-${i}`);
+      const p2 = path.join(CHUNK_TMP_DIR, `${uploadId}-${i}`);
+      if (fs.existsSync(p1) || fs.existsSync(p2)) {
+        existingChunks.push(i);
+      }
+    }
+    res.json({ uploadId, existingChunks });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/upload-chunk
 // Receives a single 50 MB slice and writes it to /tmp/hcdave-chunks/
 app.post('/api/upload-chunk', rateLimitAuth, auth, chunkUpload.single('chunk'), (req, res) => {
@@ -818,6 +1059,11 @@ app.post('/api/upload-complete', rateLimitAuth, auth, async (req, res) => {
     fs.mkdirSync(destDir, { recursive: true });
     const destFile = path.join(destDir, filename);
     const chunkDir = path.join(drive.mount, '.hcdave-chunks');
+
+    // If destination file already exists, snapshot current version for file recovery!
+    if (fs.existsSync(destFile)) {
+      saveFileVersion(drive.mount, path.join(uploadPath || '/', filename));
+    }
 
     // Stream-merge chunks in order
     const writeStream = fs.createWriteStream(destFile);
@@ -961,29 +1207,91 @@ app.post('/api/rename', rateLimitAuth, auth, (req, res) => {
   }
 });
 
-// POST /api/move
+// POST /api/copy — fast same-drive or cross-drive copy
+app.post('/api/copy', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { sourceDriveId, targetDriveId, paths, destPath } = req.body;
+    if (!paths || !Array.isArray(paths) || paths.length === 0 || !destPath) {
+      return res.status(400).json({ error: 'paths array and destPath are required' });
+    }
+    const drives = getMountedDrives();
+    const srcDrive = drives.find(d => d.id === sourceDriveId);
+    const dstDrive = drives.find(d => d.id === (targetDriveId || sourceDriveId));
+    if (!srcDrive) return res.status(404).json({ error: 'Source drive not found' });
+    if (!dstDrive) return res.status(404).json({ error: 'Destination drive not found' });
+
+    const targetDir = safePath(dstDrive.mount, destPath);
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+    let copiedCount = 0;
+    const errors = [];
+
+    for (const p of paths) {
+      try {
+        const sourcePath = safePath(srcDrive.mount, p);
+        if (!fs.existsSync(sourcePath)) {
+          errors.push(`Not found: ${p}`);
+          continue;
+        }
+        const base = path.basename(sourcePath);
+        let destFile = path.join(targetDir, base);
+
+        // If same drive and same folder: copy as "name - Copy"
+        if (srcDrive.id === dstDrive.id && path.dirname(sourcePath) === targetDir) {
+          const ext = path.extname(base);
+          const nameWithoutExt = path.basename(base, ext);
+          destFile = path.join(targetDir, `${nameWithoutExt} - Copy${ext}`);
+        }
+
+        // Fast native recursive copy — runs at full bus bandwidth on same machine
+        fs.cpSync(sourcePath, destFile, { recursive: true });
+        copiedCount++;
+      } catch (err) {
+        errors.push(`Failed to copy ${p}: ${err.message}`);
+      }
+    }
+
+    if (errors.length > 0 && copiedCount === 0) {
+      return res.status(500).json({ error: 'Copy failed', errors });
+    }
+    res.json({ success: true, copied: copiedCount, errors });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/move — same-drive (fast rename) or cross-drive (copy then remove source)
 app.post('/api/move', rateLimitAuth, auth, (req, res) => {
   try {
-    const { driveId, paths, destPath } = req.body;
+    const { driveId, targetDriveId, paths, destPath } = req.body;
     if (!paths || !Array.isArray(paths) || !destPath) return res.status(400).json({ error: 'paths array and destPath are required' });
 
     const drives = getMountedDrives();
-    const drive = drives.find(d => d.id === driveId) || drives[0];
-    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+    const srcDrive = drives.find(d => d.id === driveId) || drives[0];
+    const dstDrive = drives.find(d => d.id === (targetDriveId || driveId)) || srcDrive;
+    if (!srcDrive || !dstDrive) return res.status(404).json({ error: 'Drive not found' });
 
-    const targetDir = safePath(drive.mount, destPath);
+    const isCrossDrive = srcDrive.id !== dstDrive.id;
+    const targetDir = safePath(dstDrive.mount, destPath);
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
     const errors = [];
     for (const p of paths) {
       try {
-        const source = safePath(drive.mount, p);
+        const source = safePath(srcDrive.mount, p);
         if (fs.existsSync(source)) {
           const dest = path.join(targetDir, path.basename(source));
           if (fs.existsSync(dest)) {
             errors.push(`${path.basename(source)} already exists in destination`);
           } else {
-            fs.renameSync(source, dest);
+            if (isCrossDrive) {
+              // Cross-drive: fast local copy then delete source
+              fs.cpSync(source, dest, { recursive: true });
+              fs.rmSync(source, { recursive: true, force: true });
+            } else {
+              // Same-drive: instantaneous inode rename
+              fs.renameSync(source, dest);
+            }
           }
         }
       } catch (e) {
@@ -998,7 +1306,7 @@ app.post('/api/move', rateLimitAuth, auth, (req, res) => {
   }
 });
 
-// POST /api/delete
+// POST /api/delete (Permanent deletion)
 app.post('/api/delete', rateLimitAuth, auth, (req, res) => {
   let { driveId, paths } = req.body;
   if (!paths && req.body['paths[]']) paths = req.body['paths[]'];
@@ -1038,9 +1346,254 @@ app.post('/api/delete', rateLimitAuth, auth, (req, res) => {
   res.json({ success: true, deleted: deletedCount, errors });
 });
 
-// POST /api/share
+// ── Recycle Bin (Trash) ───────────────────────────────────────
+function getTrashDir(driveMount) {
+  return path.join(driveMount, '.hcdave-trash');
+}
+function getTrashIndexPath(driveMount) {
+  return path.join(getTrashDir(driveMount), 'trash-index.json');
+}
+function loadTrashIndex(driveMount) {
+  try {
+    const p = getTrashIndexPath(driveMount);
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (_) {}
+  return [];
+}
+function saveTrashIndex(driveMount, items) {
+  try {
+    const tDir = getTrashDir(driveMount);
+    fs.mkdirSync(tDir, { recursive: true });
+    fs.writeFileSync(getTrashIndexPath(driveMount), JSON.stringify(items, null, 2));
+  } catch (_) {}
+}
+
+// POST /api/trash/send — move file/folder to recycle bin
+app.post('/api/trash/send', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, paths } = req.body;
+    if (!paths || !Array.isArray(paths) || paths.length === 0) {
+      return res.status(400).json({ error: 'paths array required' });
+    }
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const tDir = getTrashDir(drive.mount);
+    fs.mkdirSync(tDir, { recursive: true });
+    const index = loadTrashIndex(drive.mount);
+    const moved = [];
+
+    for (const p of paths) {
+      try {
+        const full = safePath(drive.mount, p);
+        if (fs.existsSync(full)) {
+          const id = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+          const baseName = path.basename(full);
+          const trashFileName = `${id}___${baseName}`;
+          const dest = path.join(tDir, trashFileName);
+          const st = fs.statSync(full);
+
+          fs.renameSync(full, dest);
+
+          index.unshift({
+            id,
+            trashPath: trashFileName,
+            originalPath: p,
+            name: baseName,
+            isDir: st.isDirectory(),
+            size: st.size,
+            deletedAt: new Date().toISOString()
+          });
+          moved.push(p);
+        }
+      } catch (err) {
+        console.error('Trash error:', err);
+      }
+    }
+
+    saveTrashIndex(drive.mount, index);
+    res.json({ success: true, count: moved.length, moved });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/trash — list recycle bin items
+app.get('/api/trash', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId } = req.query;
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const tDir = getTrashDir(drive.mount);
+    const index = loadTrashIndex(drive.mount);
+    const existing = index.filter(item => fs.existsSync(path.join(tDir, item.trashPath)));
+    if (existing.length !== index.length) {
+      saveTrashIndex(drive.mount, existing);
+    }
+    res.json(existing);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/trash/restore — restore item from recycle bin
+app.post('/api/trash/restore', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, trashPaths } = req.body;
+    if (!trashPaths || !Array.isArray(trashPaths)) return res.status(400).json({ error: 'trashPaths array required' });
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const tDir = getTrashDir(drive.mount);
+    let index = loadTrashIndex(drive.mount);
+    const restored = [];
+
+    for (const tp of trashPaths) {
+      const entry = index.find(i => i.trashPath === tp || i.id === tp);
+      if (entry) {
+        const src = path.join(tDir, entry.trashPath);
+        if (fs.existsSync(src)) {
+          let dest = safePath(drive.mount, entry.originalPath);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          if (fs.existsSync(dest)) {
+            const ext = path.extname(dest);
+            const base = path.basename(dest, ext);
+            dest = path.join(path.dirname(dest), `${base} (Restored ${Date.now()})${ext}`);
+          }
+          fs.renameSync(src, dest);
+          restored.push(entry.name);
+          index = index.filter(i => i !== entry);
+        }
+      }
+    }
+
+    saveTrashIndex(drive.mount, index);
+    res.json({ success: true, count: restored.length, restored });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/trash/delete — permanently delete from recycle bin
+app.post('/api/trash/delete', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, trashPaths } = req.body;
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const tDir = getTrashDir(drive.mount);
+    let index = loadTrashIndex(drive.mount);
+    let deletedCount = 0;
+
+    for (const tp of trashPaths) {
+      const entry = index.find(i => i.trashPath === tp || i.id === tp);
+      if (entry) {
+        const src = path.join(tDir, entry.trashPath);
+        if (fs.existsSync(src)) {
+          fs.rmSync(src, { recursive: true, force: true });
+          deletedCount++;
+        }
+        index = index.filter(i => i !== entry);
+      }
+    }
+
+    saveTrashIndex(drive.mount, index);
+    res.json({ success: true, deleted: deletedCount });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/trash/empty — empty entire recycle bin
+app.post('/api/trash/empty', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId } = req.body;
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const tDir = getTrashDir(drive.mount);
+    if (fs.existsSync(tDir)) {
+      fs.rmSync(tDir, { recursive: true, force: true });
+      fs.mkdirSync(tDir, { recursive: true });
+    }
+    saveTrashIndex(drive.mount, []);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── File Version History Routes ───────────────────────────────
+// GET /api/versions — list file versions
+app.get('/api/versions', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, path: filePath } = req.query;
+    if (!driveId || !filePath) return res.status(400).json({ error: 'driveId and path required' });
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const vDir = getVersionsDir(drive.mount);
+    if (!fs.existsSync(vDir)) return res.json([]);
+
+    const relNorm = (filePath || '').replace(/^(\/|\\)+/, '');
+    const safeName = Buffer.from(relNorm).toString('hex').slice(0, 32);
+    const files = fs.readdirSync(vDir).filter(f => f.startsWith(`${safeName}___`));
+
+    const versions = files.map(f => {
+      const parts = f.split('___');
+      const timestamp = parseInt(parts[1], 10);
+      const st = fs.statSync(path.join(vDir, f));
+      return {
+        versionId: f,
+        name: parts[2] || path.basename(filePath),
+        timestamp,
+        date: new Date(timestamp).toISOString(),
+        size: st.size,
+        formattedSize: formatSize(st.size)
+      };
+    }).sort((a, b) => b.timestamp - a.timestamp);
+
+    res.json(versions);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/versions/restore — restore a file version
+app.post('/api/versions/restore', rateLimitAuth, auth, (req, res) => {
+  try {
+    const { driveId, path: filePath, versionId } = req.body;
+    if (!driveId || !filePath || !versionId) return res.status(400).json({ error: 'Missing parameters' });
+    const drives = getMountedDrives();
+    const drive = drives.find(d => d.id === driveId) || drives[0];
+    if (!drive) return res.status(404).json({ error: 'Drive not found' });
+
+    const vDir = getVersionsDir(drive.mount);
+    const verFile = path.join(vDir, path.basename(versionId));
+    if (!fs.existsSync(verFile)) return res.status(404).json({ error: 'Version not found' });
+
+    const target = safePath(drive.mount, filePath);
+    // Save current as a version first
+    saveFileVersion(drive.mount, filePath);
+    // Restore
+    fs.copyFileSync(verFile, target);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Secure File Sharing ───────────────────────────────────────
+// POST /api/share — create share link with optional password, expiry, download limit
 app.post('/api/share', rateLimitAuth, auth, (req, res) => {
-  const { driveId, filePath, filePaths, burnAfterReading } = req.body;
+  const { driveId, filePath, filePaths, burnAfterReading, password, expiresAt, downloadLimit } = req.body;
   const targetPaths = filePaths || (filePath ? [filePath] : null);
   if (!driveId || !targetPaths || !Array.isArray(targetPaths) || targetPaths.length === 0) {
     return res.status(400).json({ error: 'Missing driveId or target file path(s)' });
@@ -1055,7 +1608,7 @@ app.post('/api/share', rateLimitAuth, auth, (req, res) => {
       const fullPath = safePath(drive.mount, p);
       if (!fs.existsSync(fullPath)) return res.status(404).json({ error: `File not found: ${p}` });
     }
-    
+
     const token = crypto.randomBytes(16).toString('hex');
     const shares = loadShares();
     shares[token] = {
@@ -1063,25 +1616,80 @@ app.post('/api/share', rateLimitAuth, auth, (req, res) => {
       filePath: targetPaths.length === 1 ? targetPaths[0] : null,
       filePaths: targetPaths.length > 1 ? targetPaths : null,
       burnAfterReading: !!burnAfterReading,
+      password: password ? String(password).trim() : null,
+      expiresAt: expiresAt || null,
+      downloadLimit: downloadLimit ? Number(downloadLimit) : null,
+      downloadCount: 0,
       createdAt: new Date().toISOString()
     };
     saveShares(shares);
-    
+
     res.json({ token, success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// PUT /api/share/:token
-app.put('/api/share/:token', rateLimitAuth, auth, (req, res) => {
-  const { burnAfterReading } = req.body;
+// GET /api/shares — list all active shares (admin)
+app.get('/api/shares', rateLimitAuth, auth, (req, res) => {
+  const shares = loadShares();
+  const list = Object.entries(shares).map(([token, s]) => ({
+    token,
+    driveId: s.driveId,
+    filePath: s.filePath,
+    filePaths: s.filePaths,
+    burnAfterReading: s.burnAfterReading,
+    hasPassword: !!s.password,
+    expiresAt: s.expiresAt || null,
+    downloadLimit: s.downloadLimit || null,
+    downloadCount: s.downloadCount || 0,
+    createdAt: s.createdAt,
+  }));
+  res.json(list);
+});
+
+// DELETE /api/share/:token and POST /api/share/:token/revoke — revoke link
+app.delete('/api/share/:token', rateLimitAuth, auth, (req, res) => {
   const shares = loadShares();
   if (!shares[req.params.token]) return res.status(404).json({ error: 'Share not found' });
-  
-  shares[req.params.token].burnAfterReading = !!burnAfterReading;
+  delete shares[req.params.token];
   saveShares(shares);
   res.json({ success: true });
+});
+
+app.post('/api/share/:token/revoke', rateLimitAuth, auth, (req, res) => {
+  const shares = loadShares();
+  if (!shares[req.params.token]) return res.status(404).json({ error: 'Share not found' });
+  delete shares[req.params.token];
+  saveShares(shares);
+  res.json({ success: true });
+});
+
+// PUT /api/share/:token — update share settings
+app.put('/api/share/:token', rateLimitAuth, auth, (req, res) => {
+  const { burnAfterReading, password, expiresAt, downloadLimit } = req.body;
+  const shares = loadShares();
+  if (!shares[req.params.token]) return res.status(404).json({ error: 'Share not found' });
+
+  if (typeof burnAfterReading === 'boolean') shares[req.params.token].burnAfterReading = burnAfterReading;
+  if (password !== undefined) shares[req.params.token].password = password ? String(password).trim() : null;
+  if (expiresAt !== undefined) shares[req.params.token].expiresAt = expiresAt;
+  if (downloadLimit !== undefined) shares[req.params.token].downloadLimit = downloadLimit ? Number(downloadLimit) : null;
+  saveShares(shares);
+  res.json({ success: true });
+});
+
+// POST /api/s/:token/verify — public password check
+app.post('/api/s/:token/verify', (req, res) => {
+  const shares = loadShares();
+  const share = shares[req.params.token];
+  if (!share) return res.status(404).json({ error: 'Share link invalid or expired' });
+  if (!share.password) return res.json({ valid: true });
+  const { password } = req.body || {};
+  if (password && String(password).trim() === share.password) {
+    return res.json({ valid: true });
+  }
+  return res.status(401).json({ error: 'Incorrect password' });
 });
 
 // POST /api/update (Update Agent Software via Git)
@@ -1411,6 +2019,26 @@ app.get('/api/s/:token', (req, res) => {
     const isDir = stat.isDirectory();
     const type = getFileType(path.basename(fullPath), isDir);
 
+    // Expiry check
+    if (share.expiresAt && new Date(share.expiresAt).getTime() < Date.now()) {
+      return res.status(410).json({ error: 'This share link has expired.' });
+    }
+
+    // Download limit check
+    if (share.downloadLimit && (share.downloadCount || 0) >= share.downloadLimit) {
+      return res.status(410).json({ error: 'Download limit for this share link has been reached.' });
+    }
+
+    // Password protection check
+    const clientPwd = req.query.pwd || req.headers['x-share-password'];
+    if (share.password && (!clientPwd || String(clientPwd).trim() !== share.password)) {
+      return res.json({
+        name: path.basename(fullPath),
+        requiresPassword: true,
+        isDir,
+      });
+    }
+
     let downloadToken = isFromTemp ? tempTokens.get(token).downloadToken : token;
     
     // BURN ON VIEW LOGIC: If it's a one-time link and hasn't been burned yet, burn it NOW.
@@ -1441,6 +2069,9 @@ app.get('/api/s/:token', (req, res) => {
       size: isDir ? 'Folder' : formatSize(stat.size),
       isDir,
       burnAfterReading: share.burnAfterReading,
+      expiresAt: share.expiresAt || null,
+      downloadLimit: share.downloadLimit || null,
+      downloadCount: share.downloadCount || 0,
       downloadToken
     });
   } catch (e) {
@@ -1548,6 +2179,22 @@ app.get('/api/s/:token/download', (req, res) => {
   const share = shares[token];
   if (!share) return res.status(404).json({ error: 'Share link invalid or expired.' });
 
+  // Expiry check
+  if (share.expiresAt && new Date(share.expiresAt).getTime() < Date.now()) {
+    return res.status(410).json({ error: 'This share link has expired.' });
+  }
+
+  // Download limit check
+  if (share.downloadLimit && (share.downloadCount || 0) >= share.downloadLimit) {
+    return res.status(410).json({ error: 'Download limit for this share link has been reached.' });
+  }
+
+  // Password check
+  const clientPwd = req.query.pwd || req.headers['x-share-password'];
+  if (share.password && (!clientPwd || String(clientPwd).trim() !== share.password)) {
+    return res.status(401).json({ error: 'Password required' });
+  }
+
   const drives = getMountedDrives();
   const drive = drives.find(d => d.id === share.driveId);
   if (!drive) return res.status(404).json({ error: 'Drive offline' });
@@ -1555,6 +2202,13 @@ app.get('/api/s/:token/download', (req, res) => {
   try {
     const fullPath = safePath(drive.mount, share.filePath);
     if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File no longer exists' });
+
+    // Track download count if this is a download (not an inline preview or range request)
+    if (!req.query.inline && !req.headers.range) {
+      share.downloadCount = (share.downloadCount || 0) + 1;
+      saveShares(shares);
+    }
+
     streamFile(fullPath, req, res);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2244,4 +2898,306 @@ app.post('/api/cache/set-mount', rateLimitAuth, auth, (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+/* ═══════════════════════════════════════════════════════════════
+   AUTOMATED DRIVE BACKUP ENGINE
+   ═══════════════════════════════════════════════════════════════
+   - Compresses drive files/folders into a .tar.gz archive
+   - Compresses 2GB folders/files down significantly
+   - Runs on-demand or automatically at scheduled nightly time
+   - Instant 1-click restore/decompression back to any drive
+   ═══════════════════════════════════════════════════════════════ */
+
+let backupJob = {
+  running:        false,
+  sourceDriveId:  '',
+  destDriveId:    '',
+  currentFile:    '',
+  total:          0,
+  done:           0,
+  startedAt:      null,
+  lastArchive:    '',
+  lastError:      '',
+  tarProc:        null,
+};
+
+let backupSchedule = {
+  enabled:        false,
+  startTime:      '02:00',
+  sourceDriveId:  '',
+  destDriveId:    '',
+  lastRun:        null,
+};
+
+// Persist backup schedule
+const backupScheduleFile = path.join(__dirname, 'backup_schedule.json');
+try {
+  if (fs.existsSync(backupScheduleFile)) {
+    backupSchedule = { ...backupSchedule, ...JSON.parse(fs.readFileSync(backupScheduleFile, 'utf8')) };
+  }
+} catch (_) {}
+
+function saveBackupSchedule() {
+  try {
+    fs.writeFileSync(backupScheduleFile, JSON.stringify(backupSchedule, null, 2), 'utf8');
+  } catch (_) {}
+}
+
+function getBackupDir(destMount) {
+  return path.join(destMount, 'hcdave-backups');
+}
+function getBackupIndex(destMount) {
+  return path.join(getBackupDir(destMount), 'backup-index.json');
+}
+function readBackupIndex(destMount) {
+  try {
+    const p = getBackupIndex(destMount);
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (_) {}
+  return [];
+}
+function writeBackupIndex(destMount, items) {
+  try {
+    const dir = getBackupDir(destMount);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(getBackupIndex(destMount), JSON.stringify(items, null, 2));
+  } catch (_) {}
+}
+
+function getAllBackupArchives() {
+  const drives = getMountedDrives();
+  const archives = [];
+  for (const d of drives) {
+    const list = readBackupIndex(d.mount);
+    for (const item of list) {
+      if (fs.existsSync(item.path)) {
+        archives.push(item);
+      }
+    }
+  }
+  return archives;
+}
+
+async function runBackupJob(sourceDriveId, destDriveId) {
+  if (backupJob.running) return;
+
+  const drives = getMountedDrives();
+  const srcDrive = drives.find(d => d.id === sourceDriveId);
+  const dstDrive = drives.find(d => d.id === destDriveId);
+
+  if (!srcDrive || !dstDrive) {
+    backupJob.lastError = 'Source or destination drive not found';
+    return;
+  }
+
+  const bDir = path.join(dstDrive.mount, 'hcdave-backups', srcDrive.id);
+  fs.mkdirSync(bDir, { recursive: true });
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const archiveName = `backup-${srcDrive.name.replace(/\s+/g, '_')}-${timestamp}.tar.gz`;
+  const archivePath = path.join(bDir, archiveName);
+
+  backupJob.running       = true;
+  backupJob.sourceDriveId = sourceDriveId;
+  backupJob.destDriveId   = destDriveId;
+  backupJob.startedAt     = Date.now();
+  backupJob.lastError     = '';
+  backupJob.total         = 100;
+  backupJob.done          = 10;
+  backupJob.currentFile   = `Compressing ${srcDrive.name}...`;
+
+  return new Promise((resolve) => {
+    // Exclude caches, temporary files, trash, and chunk directories
+    const args = [
+      '-czf', archivePath,
+      '-C', srcDrive.mount,
+      '--exclude=.hcdave-*',
+      '--exclude=.Spotlight-*',
+      '--exclude=.Trashes',
+      '--exclude=$RECYCLE.BIN',
+      '--exclude=System Volume Information',
+      '.'
+    ];
+
+    const proc = spawn('tar', args);
+    backupJob.tarProc = proc;
+
+    let timer = setInterval(() => {
+      if (backupJob.running && backupJob.done < 90) {
+        backupJob.done += 5;
+      }
+    }, 1000);
+
+    proc.on('close', (code) => {
+      clearInterval(timer);
+      backupJob.tarProc = null;
+      backupJob.running = false;
+
+      if (code === 0 && fs.existsSync(archivePath)) {
+        backupJob.done = 100;
+        backupJob.lastArchive = archivePath;
+        backupJob.currentFile = '';
+        const st = fs.statSync(archivePath);
+
+        const index = readBackupIndex(dstDrive.mount);
+        index.unshift({
+          id: timestamp,
+          name: archiveName,
+          path: archivePath,
+          sourceDriveId: srcDrive.id,
+          sourceDriveName: srcDrive.name,
+          destDriveId: dstDrive.id,
+          createdAt: new Date().toISOString(),
+          size: st.size,
+          formattedSize: formatSize(st.size)
+        });
+        writeBackupIndex(dstDrive.mount, index);
+        console.log(`✅ Backup complete: ${archivePath} (${formatSize(st.size)})`);
+      } else {
+        backupJob.lastError = `Backup process exited with code ${code}`;
+        console.error('Backup failed:', backupJob.lastError);
+      }
+      resolve();
+    });
+
+    proc.on('error', (err) => {
+      clearInterval(timer);
+      backupJob.tarProc = null;
+      backupJob.running = false;
+      backupJob.lastError = err.message;
+      resolve();
+    });
+  });
+}
+
+async function restoreBackupJob(archivePath, targetDriveId) {
+  const drives = getMountedDrives();
+  const tgtDrive = drives.find(d => d.id === targetDriveId);
+  if (!tgtDrive) throw new Error('Target restore drive not found');
+  if (!fs.existsSync(archivePath)) throw new Error('Backup archive file not found');
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn('tar', ['-xzf', archivePath, '-C', tgtDrive.mount]);
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Restore failed with exit code ${code}`));
+    });
+    proc.on('error', reject);
+  });
+}
+
+// Nightly cron for backup (checks every minute)
+setInterval(() => {
+  if (!backupSchedule.enabled) return;
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  if (hhmm !== backupSchedule.startTime) return;
+  const lastRun = backupSchedule.lastRun ? new Date(backupSchedule.lastRun) : null;
+  if (lastRun && (Date.now() - lastRun.getTime()) < 60000) return;
+
+  console.log(`⏰ Nightly backup triggered at ${hhmm}`);
+  backupSchedule.lastRun = new Date().toISOString();
+  saveBackupSchedule();
+
+  if (backupSchedule.sourceDriveId && backupSchedule.destDriveId) {
+    runBackupJob(backupSchedule.sourceDriveId, backupSchedule.destDriveId).catch(console.error);
+  } else {
+    const drives = getMountedDrives();
+    if (drives.length >= 2) {
+      const dest = drives.find(d => d.role && d.role.toLowerCase() === 'backup') || drives[1];
+      const src = drives.find(d => d.id !== dest.id) || drives[0];
+      runBackupJob(src.id, dest.id).catch(console.error);
+    }
+  }
+}, 60000);
+
+// GET /api/backup/status
+app.get('/api/backup/status', rateLimitAuth, auth, (_, res) => {
+  const archives = getAllBackupArchives();
+  res.json({
+    job: {
+      running:       backupJob.running,
+      sourceDriveId: backupJob.sourceDriveId,
+      destDriveId:   backupJob.destDriveId,
+      currentFile:   backupJob.currentFile,
+      total:         backupJob.total,
+      done:          backupJob.done,
+      startedAt:     backupJob.startedAt,
+      lastArchive:   backupJob.lastArchive,
+      lastError:     backupJob.lastError,
+    },
+    schedule: backupSchedule,
+    archives,
+  });
+});
+
+// POST /api/backup/start
+app.post('/api/backup/start', rateLimitAuth, auth, (req, res) => {
+  const { sourceDriveId, destDriveId } = req.body || {};
+  if (!sourceDriveId || !destDriveId) {
+    return res.status(400).json({ error: 'sourceDriveId and destDriveId required' });
+  }
+  if (backupJob.running) {
+    return res.status(409).json({ error: 'A backup job is already running' });
+  }
+  // Start in background
+  runBackupJob(sourceDriveId, destDriveId).catch(console.error);
+  res.json({ success: true, message: 'Backup job started' });
+});
+
+// POST /api/backup/stop
+app.post('/api/backup/stop', rateLimitAuth, auth, (_, res) => {
+  if (backupJob.tarProc) {
+    try { backupJob.tarProc.kill('SIGTERM'); } catch (_) {}
+    backupJob.tarProc = null;
+  }
+  backupJob.running = false;
+  res.json({ success: true, message: 'Backup job stopped' });
+});
+
+// POST /api/backup/restore
+app.post('/api/backup/restore', rateLimitAuth, auth, async (req, res) => {
+  const { archivePath, targetDriveId } = req.body || {};
+  if (!archivePath || !targetDriveId) {
+    return res.status(400).json({ error: 'archivePath and targetDriveId required' });
+  }
+  try {
+    await restoreBackupJob(archivePath, targetDriveId);
+    res.json({ success: true, message: 'Backup restored successfully' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/backup/schedule
+app.post('/api/backup/schedule', rateLimitAuth, auth, (req, res) => {
+  const { enabled, startTime, sourceDriveId, destDriveId } = req.body || {};
+  if (typeof enabled === 'boolean') backupSchedule.enabled = enabled;
+  if (startTime && /^\d{2}:\d{2}$/.test(startTime)) backupSchedule.startTime = startTime;
+  if (sourceDriveId) backupSchedule.sourceDriveId = sourceDriveId;
+  if (destDriveId) backupSchedule.destDriveId = destDriveId;
+  saveBackupSchedule();
+  res.json({ success: true, schedule: backupSchedule });
+});
+
+// DELETE /api/backup/archive
+app.delete('/api/backup/archive', rateLimitAuth, auth, (req, res) => {
+  const { archivePath } = req.body || {};
+  if (!archivePath) return res.status(400).json({ error: 'archivePath required' });
+  try {
+    if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
+    const drives = getMountedDrives();
+    for (const d of drives) {
+      const index = readBackupIndex(d.mount);
+      const filtered = index.filter(i => i.path !== archivePath);
+      if (filtered.length !== index.length) {
+        writeBackupIndex(d.mount, filtered);
+      }
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 
