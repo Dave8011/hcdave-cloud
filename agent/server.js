@@ -4057,11 +4057,13 @@ async function runBackupJob(sourceKey, targetKeys, options) {
           backupResumePlan.autoResume = false;
           saveBackupResumePlan(backupResumePlan);
         }
-        try {
-          const root = resumableBackupRoot(destDrive.mount, sourceIdentity);
-          const manifest = readResumableManifest(root, sourceDrive, destDrive);
-          setTargetManifestProgress(root, manifest, targetState);
-        } catch (_) {}
+        if (isMountedDrive(destDrive)) {
+          try {
+            const root = resumableBackupRoot(destDrive.mount, sourceIdentity);
+            const manifest = readResumableManifest(root, sourceDrive, destDrive);
+            setTargetManifestProgress(root, manifest, targetState);
+          } catch (_) {}
+        }
         if (backupJob.stopRequested || !isMountedDrive(sourceDrive)) break;
       }
     }
