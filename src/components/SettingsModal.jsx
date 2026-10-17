@@ -566,7 +566,7 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
                                   className="btn btn-primary"
                                   style={{ padding: '5px 10px', fontSize: '0.78rem' }}
                                   onClick={() => {
-                                    if (!newName || newName === d.name) { setRenamingDriveId(null); return; }
+                                    if (!newName || (newName === d.name && d.nameIsCustom)) { setRenamingDriveId(null); return; }
                                     setRenameTarget({ oldName: d.name, oldMount: d.mount, newName });
                                     setShowRenameConfirm(true);
                                   }}
