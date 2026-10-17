@@ -76,7 +76,14 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
     }).catch(() => {});
     // Fetch drive roles
     StorageService.getDriveRoles().then(roles => {
-      setDriveRoles(roles || {});
+      const normalized = { ...(roles || {}) };
+      // Migrate legacy filesystem-UUID role entries to the stable hardware key where available.
+      (drives || []).forEach(d => {
+        const stableKey = d.identityKey || d.uuid || d.id;
+        const legacyKey = d.uuid || d.id;
+        if (normalized[legacyKey] && !normalized[stableKey]) normalized[stableKey] = normalized[legacyKey];
+      });
+      setDriveRoles(normalized);
     });
   }, []);
 
