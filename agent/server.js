@@ -3422,47 +3422,90 @@ app.post('/api/cache/set-mount', rateLimitAuth, auth, (req, res) => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
-   AUTOMATED DRIVE BACKUP ENGINE
-   ═══════════════════════════════════════════════════════════════
-   - Compresses drive files/folders into a .tar.gz archive
-   - Compresses 2GB folders/files down significantly
-   - Runs on-demand or automatically at scheduled nightly time
-   - Instant 1-click restore/decompression back to any drive
+   RESUMABLE MULTI-DESTINATION BACKUP ENGINE
+   - Individually gzip-compressed 32 MiB chunks
+   - Per-destination manifests and atomic chunk completion
+   - Accurate byte-based progress and automatic resume after restart
+   - Independent backup copies; no RAID or shared-drive dependency
+   - Legacy .tar.gz archives remain visible/restorable
    ═══════════════════════════════════════════════════════════════ */
 
+const BACKUP_CHUNK_BYTES = 32 * 1024 * 1024;
+const backupResumeFile = path.join(__dirname, 'backup_resume.json');
+const backupScheduleFile = path.join(__dirname, 'backup_schedule.json');
+
+function readBackupResumePlan() {
+  try {
+    if (!fs.existsSync(backupResumeFile)) return null;
+    const p = JSON.parse(fs.readFileSync(backupResumeFile, 'utf8'));
+    if (!p || !p.sourceIdentity || !Array.isArray(p.targetIdentities)) return null;
+    if (!Array.isArray(p.completedTargetKeys)) p.completedTargetKeys = [];
+    return p;
+  } catch (e) {
+    console.error('[Backup] Could not read resume plan:', e.message);
+    return null;
+  }
+}
+function saveBackupResumePlan(plan) {
+  const tmp = backupResumeFile + '.tmp';
+  if (!plan) {
+    try { fs.unlinkSync(backupResumeFile); } catch (_) {}
+    return;
+  }
+  fs.writeFileSync(tmp, JSON.stringify(plan, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, backupResumeFile);
+}
+let backupResumePlan = readBackupResumePlan();
+
 let backupJob = {
-  running:        false,
-  sourceDriveId:  '',
-  destDriveId:    '',
-  currentFile:    '',
-  total:          0,
-  done:           0,
-  startedAt:      null,
-  lastArchive:    '',
-  lastError:      '',
-  tarProc:        null,
+  running: false,
+  status: 'idle',
+  sourceDriveId: '',
+  sourceIdentity: '',
+  sourceDriveName: '',
+  destDriveId: '',
+  destDriveIds: [],
+  currentTarget: '',
+  currentFile: '',
+  totalBytes: 0,
+  bytesDone: 0,
+  speedBytesPerSec: 0,
+  etaSeconds: null,
+  filesTotal: 0,
+  filesDone: 0,
+  startedAt: null,
+  lastCompletedAt: null,
+  lastArchive: '',
+  lastError: '',
+  waitingForDrives: false,
+  targets: [],
+  stopRequested: false,
+  activeStreams: [],
+  activeChunkBytes: 0,
+  lastSpeedMarkAt: Date.now(),
+  speedWindowBytes: 0,
 };
 
 let backupSchedule = {
-  enabled:        false,
-  startTime:      '02:00',
-  sourceDriveId:  '',
-  destDriveId:    '',
-  lastRun:        null,
+  enabled: false,
+  startTime: '02:00',
+  sourceDriveId: '',
+  destDriveId: '',
+  destDriveIds: [],
+  lastRun: null,
 };
-
-// Persist backup schedule
-const backupScheduleFile = path.join(__dirname, 'backup_schedule.json');
 try {
   if (fs.existsSync(backupScheduleFile)) {
     backupSchedule = { ...backupSchedule, ...JSON.parse(fs.readFileSync(backupScheduleFile, 'utf8')) };
+    if (!Array.isArray(backupSchedule.destDriveIds)) {
+      backupSchedule.destDriveIds = backupSchedule.destDriveId ? [backupSchedule.destDriveId] : [];
+    }
   }
 } catch (_) {}
 
 function saveBackupSchedule() {
-  try {
-    fs.writeFileSync(backupScheduleFile, JSON.stringify(backupSchedule, null, 2), 'utf8');
-  } catch (_) {}
+  try { fs.writeFileSync(backupScheduleFile, JSON.stringify(backupSchedule, null, 2), { mode: 0o600 }); }
+  catch (e) { console.error('[Backup] Could not save schedule:', e.message); }
 }
 
 function getBackupDir(destMount) {
@@ -3479,156 +3522,735 @@ function readBackupIndex(destMount) {
   return [];
 }
 function writeBackupIndex(destMount, items) {
-  try {
-    const dir = getBackupDir(destMount);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(getBackupIndex(destMount), JSON.stringify(items, null, 2));
-  } catch (_) {}
+  const dir = getBackupDir(destMount);
+  fs.mkdirSync(dir, { recursive: true });
+  const p = getBackupIndex(destMount);
+  const tmp = p + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(items, null, 2));
+  fs.renameSync(tmp, p);
 }
-
 function getAllBackupArchives() {
   const drives = getMountedDrives();
   const archives = [];
   for (const d of drives) {
     const list = readBackupIndex(d.mount);
     for (const item of list) {
-      if (fs.existsSync(item.path)) {
-        archives.push(item);
-      }
+      if (fs.existsSync(item.path)) archives.push(item);
     }
   }
   return archives;
 }
 
-async function runBackupJob(sourceDriveId, destDriveId) {
+function resolveMountedDrive(key) {
+  if (!key) return null;
+  return cachedDrives.find(d =>
+    d.id === key || d.uuid === key || d.identityKey === key
+  ) || null;
+}
+function isMountedDrive(drive) {
+  if (!drive || !drive.mount || !fs.existsSync(drive.mount)) return false;
+  try {
+    const mountStat = fs.statSync(drive.mount);
+    const parentStat = fs.statSync(path.dirname(drive.mount));
+    return mountStat.dev !== parentStat.dev;
+  } catch (_) {
+    return false;
+  }
+}
+function stableDriveKey(drive) {
+  return drive ? (drive.identityKey || drive.uuid || drive.id) : '';
+}
+function hashBackupKey(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+function resumableBackupRoot(destMount, sourceIdentity) {
+  return path.join(destMount, 'hcdave-backups', 'resumable', hashBackupKey(sourceIdentity).slice(0, 32));
+}
+function writeJsonAtomically(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = filePath + '.tmp-' + process.pid;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
+  fs.renameSync(tmp, filePath);
+}
+function readResumableManifest(root, srcDrive, destDrive) {
+  const manifestPath = path.join(root, 'manifest.json');
+  if (fs.existsSync(manifestPath)) {
+    let existing;
+    try { existing = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
+    catch (e) { throw new Error('Existing resumable backup manifest is unreadable; refusing to overwrite it. ' + e.message); }
+    if (!existing || existing.version !== 1 || typeof existing.files !== 'object') {
+      throw new Error('Existing resumable backup manifest has an unsupported format; refusing to overwrite it.');
+    }
+    existing.files = existing.files || {};
+    return existing;
+  }
+  return {
+    version: 1,
+    sourceIdentity: stableDriveKey(srcDrive),
+    sourceDriveName: srcDrive.name,
+    destinationIdentity: stableDriveKey(destDrive),
+    destinationDriveName: destDrive.name,
+    chunkBytes: BACKUP_CHUNK_BYTES,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    files: {},
+    lastRun: { status: 'not-started', bytesDone: 0, totalBytes: 0, filesDone: 0, filesTotal: 0 }
+  };
+}
+function saveResumableManifest(root, manifest) {
+  manifest.updatedAt = new Date().toISOString();
+  writeJsonAtomically(path.join(root, 'manifest.json'), manifest);
+}
+function shouldExcludeBackupEntry(name, isDirectory) {
+  if (name.startsWith('.hcdave-')) return true;
+  if (name === 'hcdave-backups' || name === 'hcdave-video-cache') return true;
+  if (name === '.Trashes' || name === '.Spotlight-V100' || name === 'System Volume Information' || name === '$RECYCLE.BIN' || name === 'lost+found') return true;
+  if (!isDirectory && (name.endsWith('.part') || name.endsWith('.partial') || name.endsWith('.tmp'))) return true;
+  return false;
+}
+async function collectBackupFiles(root) {
+  const files = [];
+  async function walk(abs, rel) {
+    let entries;
+    try { entries = await fs.promises.readdir(abs, { withFileTypes: true }); }
+    catch (e) { throw new Error('Cannot read source folder ' + (rel || '/') + ': ' + e.message); }
+    for (const entry of entries) {
+      if (shouldExcludeBackupEntry(entry.name, entry.isDirectory())) continue;
+      const childAbs = path.join(abs, entry.name);
+      const childRel = rel ? rel + '/' + entry.name : entry.name;
+      if (entry.isDirectory()) {
+        await walk(childAbs, childRel);
+      } else if (entry.isFile()) {
+        try {
+          const stat = await fs.promises.stat(childAbs);
+          files.push({ relativePath: childRel.split(path.sep).join('/'), fullPath: childAbs, size: stat.size, mtimeMs: Math.round(stat.mtimeMs) });
+        } catch (_) {}
+      }
+    }
+  }
+  await walk(root, '');
+  files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  return files;
+}
+function backupVersionKey(file) {
+  return hashBackupKey(file.relativePath + '\0' + file.size + '\0' + file.mtimeMs).slice(0, 24);
+}
+function makeBackupVersion(root, file, versionKey) {
+  const relHash = hashBackupKey(file.relativePath);
+  const count = Math.max(1, Math.ceil(file.size / BACKUP_CHUNK_BYTES));
+  const chunks = [];
+  for (let i = 0; i < count; i++) {
+    const offset = i * BACKUP_CHUNK_BYTES;
+    const sourceBytes = file.size === 0 ? 0 : Math.min(BACKUP_CHUNK_BYTES, file.size - offset);
+    const name = 'chunks/' + relHash.slice(0, 2) + '/' + relHash + '-' + versionKey + '-' + String(i).padStart(6, '0') + '.gz';
+    chunks.push({ index: i, file: name, sourceBytes, compressedBytes: 0 });
+  }
+  return { versionKey, sourceSize: file.size, sourceMtimeMs: file.mtimeMs, chunks };
+}
+function safeChunkPath(root, chunk) {
+  const rootAbs = path.resolve(root);
+  const p = path.resolve(rootAbs, chunk.file);
+  if (!p.startsWith(rootAbs + path.sep)) throw new Error('Backup manifest contains a path outside its destination');
+  return p;
+}
+function chunkIsValid(root, chunk) {
+  try {
+    if (!chunk || !Number.isFinite(chunk.compressedBytes) || chunk.compressedBytes <= 0) return false;
+    const p = safeChunkPath(root, chunk);
+    const st = fs.statSync(p);
+    return st.isFile() && st.size === chunk.compressedBytes;
+  } catch (_) {
+    return false;
+  }
+}
+function versionChunkCount(file) {
+  return Math.max(1, Math.ceil(file.size / BACKUP_CHUNK_BYTES));
+}
+function versionIsComplete(root, version, file) {
+  if (!version || version.versionKey !== backupVersionKey(file) || version.sourceSize !== file.size || version.sourceMtimeMs !== file.mtimeMs) return false;
+  if (!Array.isArray(version.chunks) || version.chunks.length !== versionChunkCount(file)) return false;
+  let sourceBytes = 0;
+  for (let i = 0; i < version.chunks.length; i++) {
+    const ch = version.chunks[i];
+    if (ch.index !== i || !chunkIsValid(root, ch)) return false;
+    sourceBytes += ch.sourceBytes;
+  }
+  return sourceBytes === file.size;
+}
+function versionCompletedBytes(root, version, file) {
+  if (!version || version.versionKey !== backupVersionKey(file) || !Array.isArray(version.chunks)) return 0;
+  let n = 0;
+  for (const ch of version.chunks) {
+    if (chunkIsValid(root, ch)) n += Math.max(0, Number(ch.sourceBytes) || 0);
+  }
+  return Math.min(file.size, n);
+}
+function safeRemoveVersionChunks(root, version) {
+  if (!version || !Array.isArray(version.chunks)) return;
+  for (const ch of version.chunks) {
+    try { fs.unlinkSync(safeChunkPath(root, ch)); } catch (_) {}
+  }
+}
+
+let backupRestoreJob = { running: false, currentFile: '', bytesDone: 0, totalBytes: 0, filesDone: 0, filesTotal: 0, startedAt: null, restoreRoot: '', lastError: '' };
+
+let backupResumeAttemptRunning = false;
+
+function updateBackupTotals() {
+  backupJob.bytesDone = backupJob.targets.reduce((n, t) => n + (Number(t.bytesDone) || 0) + (Number(t.activeChunkBytes) || 0), 0);
+  backupJob.filesDone = backupJob.targets.reduce((n, t) => n + (Number(t.filesDone) || 0), 0);
+  backupJob.speedBytesPerSec = Math.max(0, Number(backupJob.speedBytesPerSec) || 0);
+  backupJob.etaSeconds = backupJob.speedBytesPerSec > 0
+    ? Math.max(0, Math.ceil((backupJob.totalBytes - backupJob.bytesDone) / backupJob.speedBytesPerSec))
+    : null;
+  if (backupJob.totalBytes > 0) backupJob.percent = Math.min(100, Math.max(0, Math.floor((backupJob.bytesDone / backupJob.totalBytes) * 100)));
+  else backupJob.percent = backupJob.filesTotal === 0 ? 100 : 0;
+}
+function updateBackupSpeed(bytes) {
+  const now = Date.now();
+  backupJob.speedWindowBytes += bytes;
+  const elapsed = now - backupJob.lastSpeedMarkAt;
+  if (elapsed >= 1000) {
+    backupJob.speedBytesPerSec = Math.round(backupJob.speedWindowBytes * 1000 / elapsed);
+    backupJob.speedWindowBytes = 0;
+    backupJob.lastSpeedMarkAt = now;
+  }
+}
+function setTargetManifestProgress(root, manifest, targetState) {
+  manifest.lastRun = {
+    status: targetState.status,
+    bytesDone: targetState.bytesDone,
+    totalBytes: targetState.totalBytes,
+    filesDone: targetState.filesDone,
+    filesTotal: targetState.filesTotal,
+    startedAt: targetState.startedAt,
+    completedAt: targetState.completedAt || null,
+    lastError: targetState.error || ''
+  };
+  saveResumableManifest(root, manifest);
+}
+async function compressBackupChunk(srcFile, fileInfo, chunk, root, targetState) {
+  if (!isMountedDrive(resolveMountedDrive(backupJob.sourceIdentity)) || !isMountedDrive(resolveMountedDrive(targetState.identityKey))) {
+    throw new Error('Source or backup drive disconnected');
+  }
+  const chunkPath = safeChunkPath(root, chunk);
+  fs.mkdirSync(path.dirname(chunkPath), { recursive: true });
+  const tmpPath = chunkPath + '.part-' + process.pid;
+  try { fs.unlinkSync(tmpPath); } catch (_) {}
+  const offset = chunk.index * BACKUP_CHUNK_BYTES;
+  const input = fileInfo.size === 0 ? Readable.from([]) : fs.createReadStream(srcFile, {
+    start: offset,
+    end: Math.min(fileInfo.size, offset + BACKUP_CHUNK_BYTES) - 1
+  });
+  const meter = new Transform({
+    transform(part, encoding, callback) {
+      targetState.activeChunkBytes = (targetState.activeChunkBytes || 0) + part.length;
+      updateBackupSpeed(part.length);
+      updateBackupTotals();
+      callback(null, part);
+    }
+  });
+  const gzip = zlib.createGzip({ level: zlib.constants.Z_BEST_SPEED });
+  const output = fs.createWriteStream(tmpPath, { flags: 'w' });
+  backupJob.activeStreams = [input, meter, gzip, output];
+  try {
+    await pipeline(input, meter, gzip, output);
+    if (backupJob.stopRequested) throw new Error('Backup paused by user');
+    if (!isMountedDrive(resolveMountedDrive(backupJob.sourceIdentity)) || !isMountedDrive(resolveMountedDrive(targetState.identityKey))) {
+      throw new Error('Source or backup drive disconnected');
+    }
+    fs.renameSync(tmpPath, chunkPath);
+    const st = fs.statSync(chunkPath);
+    chunk.compressedBytes = st.size;
+    targetState.bytesDone += chunk.sourceBytes;
+    targetState.activeChunkBytes = 0;
+    backupJob.activeStreams = [];
+    updateBackupTotals();
+  } catch (e) {
+    for (const stream of backupJob.activeStreams) {
+      try { stream.destroy(); } catch (_) {}
+    }
+    backupJob.activeStreams = [];
+    targetState.activeChunkBytes = 0;
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    updateBackupTotals();
+    throw e;
+  }
+}
+async function backupOneDestination(srcDrive, destDrive, files, sourceTotalBytes, targetState) {
+  if (!isMountedDrive(srcDrive)) throw new Error('Source drive is not mounted');
+  if (!isMountedDrive(destDrive)) throw new Error('Backup drive is not mounted');
+  const sourceIdentity = stableDriveKey(srcDrive);
+  const root = resumableBackupRoot(destDrive.mount, sourceIdentity);
+  fs.mkdirSync(root, { recursive: true });
+  const manifest = readResumableManifest(root, srcDrive, destDrive);
+  manifest.sourceIdentity = sourceIdentity;
+  manifest.sourceDriveName = srcDrive.name;
+  manifest.destinationIdentity = stableDriveKey(destDrive);
+  manifest.destinationDriveName = destDrive.name;
+  manifest.chunkBytes = BACKUP_CHUNK_BYTES;
+
+  const plans = [];
+  let initialBytes = 0;
+  let initiallyCompleteFiles = 0;
+
+  for (const file of files) {
+    let entry = manifest.files[file.relativePath];
+    if (!entry || typeof entry !== 'object') entry = {};
+    const key = backupVersionKey(file);
+    let version = null;
+    let isPending = false;
+
+    if (entry.current && entry.current.versionKey === key && entry.current.sourceSize === file.size && entry.current.sourceMtimeMs === file.mtimeMs) {
+      version = entry.current;
+      if (!versionIsComplete(root, version, file)) {
+        if (!Array.isArray(version.chunks) || version.chunks.length !== versionChunkCount(file)) {
+          version = makeBackupVersion(root, file, key);
+          entry.current = version;
+        }
+      }
+    } else if (entry.pending && entry.pending.versionKey === key && entry.pending.sourceSize === file.size && entry.pending.sourceMtimeMs === file.mtimeMs) {
+      version = entry.pending;
+      isPending = true;
+    } else {
+      version = makeBackupVersion(root, file, key);
+      entry.pending = version;
+      isPending = true;
+    }
+    manifest.files[file.relativePath] = entry;
+
+    for (let i = 0; i < version.chunks.length; i++) {
+      const chunk = version.chunks[i];
+      if (chunkIsValid(root, chunk)) initialBytes += chunk.sourceBytes;
+      else {
+        chunk.compressedBytes = 0;
+      }
+    }
+    const complete = versionIsComplete(root, version, file);
+    if (complete) initiallyCompleteFiles++;
+    plans.push({ file, entry, version, isPending, complete });
+  }
+
+  targetState.bytesDone = initialBytes;
+  targetState.filesDone = initiallyCompleteFiles;
+  targetState.totalBytes = sourceTotalBytes;
+  targetState.filesTotal = files.length;
+  targetState.status = 'running';
+  targetState.startedAt = targetState.startedAt || new Date().toISOString();
+  setTargetManifestProgress(root, manifest, targetState);
+
+  for (const plan of plans) {
+    if (backupJob.stopRequested) throw new Error('Backup paused by user');
+    if (!isMountedDrive(srcDrive) || !isMountedDrive(destDrive)) throw new Error('Source or backup drive disconnected');
+
+    const currentStat = fs.statSync(plan.file.fullPath);
+    if (currentStat.size !== plan.file.size || Math.round(currentStat.mtimeMs) !== plan.file.mtimeMs) {
+      throw new Error('Source changed during backup: ' + plan.file.relativePath + '. Run backup again to capture the latest version.');
+    }
+
+    const wasCompleteAtStart = plan.complete;
+    if (!plan.complete) {
+      for (const chunk of plan.version.chunks) {
+        if (backupJob.stopRequested) throw new Error('Backup paused by user');
+        if (chunkIsValid(root, chunk)) continue;
+        await compressBackupChunk(plan.file.fullPath, plan.file, chunk, root, targetState);
+        setTargetManifestProgress(root, manifest, targetState);
+      }
+
+      const afterStat = fs.statSync(plan.file.fullPath);
+      if (afterStat.size !== plan.file.size || Math.round(afterStat.mtimeMs) !== plan.file.mtimeMs) {
+        throw new Error('Source changed during backup: ' + plan.file.relativePath + '. Completed chunks remain available for resume.');
+      }
+
+      if (!versionIsComplete(root, plan.version, plan.file)) {
+        throw new Error('Chunk verification failed for ' + plan.file.relativePath);
+      }
+
+      if (plan.isPending) {
+        const oldCurrent = plan.entry.current;
+        plan.entry.current = plan.version;
+        plan.entry.pending = null;
+        manifest.files[plan.file.relativePath] = plan.entry;
+        setTargetManifestProgress(root, manifest, targetState);
+        if (oldCurrent && oldCurrent.versionKey !== plan.version.versionKey) safeRemoveVersionChunks(root, oldCurrent);
+      }
+      if (!wasCompleteAtStart) {
+        targetState.filesDone++;
+        updateBackupTotals();
+      }
+      setTargetManifestProgress(root, manifest, targetState);
+    }
+  }
+
+  targetState.status = 'completed';
+  targetState.error = '';
+  targetState.completedAt = new Date().toISOString();
+  targetState.bytesDone = sourceTotalBytes;
+  targetState.activeChunkBytes = 0;
+  setTargetManifestProgress(root, manifest, targetState);
+  return { root, manifest };
+}
+
+function planPendingTargetKeys(plan) {
+  return plan.targetIdentities.filter(k => !plan.completedTargetKeys.includes(k));
+}
+
+async function runBackupJob(sourceKey, targetKeys, options) {
   if (backupJob.running) return;
+  const opts = options || {};
+  const sourceDrive = resolveMountedDrive(sourceKey);
+  const plan = opts.existingPlan && backupResumePlan
+    ? backupResumePlan
+    : null;
 
-  const drives = getMountedDrives();
-  const srcDrive = drives.find(d => d.id === sourceDriveId);
-  const dstDrive = drives.find(d => d.id === destDriveId);
-
-  if (!srcDrive || !dstDrive) {
-    backupJob.lastError = 'Source or destination drive not found';
+  if (!sourceDrive) {
+    backupJob.status = 'waiting';
+    backupJob.waitingForDrives = true;
+    backupJob.lastError = 'Waiting for the source drive to reconnect';
+    return;
+  }
+  if (!isMountedDrive(sourceDrive)) {
+    backupJob.status = 'waiting';
+    backupJob.waitingForDrives = true;
+    backupJob.lastError = 'Source drive is not mounted';
     return;
   }
 
-  const bDir = path.join(dstDrive.mount, 'hcdave-backups', srcDrive.id);
-  fs.mkdirSync(bDir, { recursive: true });
+  const sourceIdentity = stableDriveKey(sourceDrive);
+  const requestedTargets = [...new Set((targetKeys || []).filter(Boolean))];
+  if (!requestedTargets.length) {
+    backupJob.status = 'error';
+    backupJob.lastError = 'Select at least one backup destination';
+    return;
+  }
+  for (const k of requestedTargets) {
+    if (k === sourceIdentity || k === sourceDrive.id || k === sourceDrive.uuid) {
+      backupJob.status = 'error';
+      backupJob.lastError = 'Source and backup destinations must be different physical drives';
+      return;
+    }
+  }
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const archiveName = `backup-${srcDrive.name.replace(/\s+/g, '_')}-${timestamp}.tar.gz`;
-  const archivePath = path.join(bDir, archiveName);
+  if (plan && plan.sourceIdentity === sourceIdentity &&
+      requestedTargets.every(k => plan.targetIdentities.includes(k))) {
+    backupResumePlan = plan;
+    backupResumePlan.autoResume = true;
+  } else if (backupResumePlan && backupResumePlan.sourceIdentity === sourceIdentity &&
+             requestedTargets.length === backupResumePlan.targetIdentities.length &&
+             requestedTargets.every(k => backupResumePlan.targetIdentities.includes(k))) {
+    backupResumePlan.autoResume = true;
+  } else {
+    backupResumePlan = {
+      version: 1,
+      sourceIdentity,
+      sourceDriveId: sourceDrive.id,
+      sourceDriveName: sourceDrive.name,
+      targetIdentities: requestedTargets,
+      completedTargetKeys: [],
+      autoResume: true,
+      createdAt: new Date().toISOString(),
+      lastError: ''
+    };
+  }
+  backupResumePlan.sourceDriveName = sourceDrive.name;
+  saveBackupResumePlan(backupResumePlan);
 
-  backupJob.running       = true;
-  backupJob.sourceDriveId = sourceDriveId;
-  backupJob.destDriveId   = destDriveId;
-  backupJob.startedAt     = Date.now();
-  backupJob.lastError     = '';
-  backupJob.total         = 100;
-  backupJob.done          = 10;
-  backupJob.currentFile   = `Compressing ${srcDrive.name}...`;
+  const pendingKeys = planPendingTargetKeys(backupResumePlan);
+  const mountedTargetKeys = pendingKeys.filter(k => isMountedDrive(resolveMountedDrive(k)));
+  const targetsToProcess = pendingKeys;
+  if (!mountedTargetKeys.length) {
+    backupJob.status = 'waiting';
+    backupJob.waitingForDrives = true;
+    backupJob.sourceDriveId = sourceDrive.id;
+    backupJob.sourceIdentity = sourceIdentity;
+    backupJob.sourceDriveName = sourceDrive.name;
+    backupJob.destDriveIds = requestedTargets;
+    backupJob.lastError = 'Waiting for at least one selected backup drive to connect';
+    backupJob.targets = pendingKeys.map(k => {
+      const d = resolveMountedDrive(k);
+      return { identityKey: k, driveId: d ? d.id : '', name: d ? d.name : k, status: 'waiting', bytesDone: 0, totalBytes: 0, filesDone: 0, filesTotal: 0, error: 'Drive not connected' };
+    });
+    return;
+  }
 
-  return new Promise((resolve) => {
-    // Exclude caches, temporary files, trash, and chunk directories
-    const args = [
-      '-czf', archivePath,
-      '-C', srcDrive.mount,
-      '--exclude=.hcdave-*',
-      '--exclude=.Spotlight-*',
-      '--exclude=.Trashes',
-      '--exclude=$RECYCLE.BIN',
-      '--exclude=System Volume Information',
-      '.'
-    ];
+  backupJob.running = true;
+  backupJob.status = 'running';
+  backupJob.stopRequested = false;
+  backupJob.waitingForDrives = false;
+  backupJob.sourceDriveId = sourceDrive.id;
+  backupJob.sourceIdentity = sourceIdentity;
+  backupJob.sourceDriveName = sourceDrive.name;
+  backupJob.destDriveIds = requestedTargets.slice();
+  backupJob.destDriveId = mountedTargetKeys[0] || '';
+  backupJob.currentTarget = '';
+  backupJob.currentFile = '';
+  backupJob.bytesDone = 0;
+  backupJob.totalBytes = 0;
+  backupJob.speedBytesPerSec = 0;
+  backupJob.etaSeconds = null;
+  backupJob.filesDone = 0;
+  backupJob.filesTotal = 0;
+  backupJob.lastError = '';
+  backupJob.startedAt = new Date().toISOString();
+  backupJob.targets = targetsToProcess.map(k => {
+    const d = resolveMountedDrive(k);
+    return {
+      identityKey: k,
+      driveId: d ? d.id : '',
+      name: d ? d.name : k,
+      status: isMountedDrive(d) ? 'pending' : 'waiting',
+      bytesDone: 0,
+      activeChunkBytes: 0,
+      totalBytes: 0,
+      filesDone: 0,
+      filesTotal: 0,
+      startedAt: null,
+      completedAt: null,
+      error: ''
+    };
+  });
 
-    const proc = spawn('tar', args);
-    backupJob.tarProc = proc;
+  try {
+    const files = await collectBackupFiles(sourceDrive.mount);
+    const sourceTotalBytes = files.reduce((n, f) => n + f.size, 0);
+    backupJob.filesTotal = files.length * targetsToProcess.length;
+    backupJob.totalBytes = sourceTotalBytes * targetsToProcess.length;
+    backupJob.filesDone = 0;
+    updateBackupTotals();
 
-    let timer = setInterval(() => {
-      if (backupJob.running && backupJob.done < 90) {
-        backupJob.done += 5;
+    for (let i = 0; i < backupJob.targets.length; i++) {
+      const targetState = backupJob.targets[i];
+      if (backupResumePlan.completedTargetKeys.includes(targetState.identityKey)) {
+        targetState.status = 'completed';
+        targetState.bytesDone = sourceTotalBytes;
+        targetState.totalBytes = sourceTotalBytes;
+        targetState.filesDone = files.length;
+        targetState.filesTotal = files.length;
+        updateBackupTotals();
+        continue;
       }
-    }, 1000);
+      const destDrive = resolveMountedDrive(targetState.identityKey);
+      targetState.driveId = destDrive ? destDrive.id : '';
+      if (!isMountedDrive(destDrive)) {
+        targetState.status = 'waiting';
+        targetState.error = 'Backup drive not connected';
+        backupJob.waitingForDrives = true;
+        continue;
+      }
+      backupJob.currentTarget = destDrive.name;
+      targetState.status = 'running';
+      targetState.startedAt = new Date().toISOString();
+      try {
+        await backupOneDestination(sourceDrive, destDrive, files, sourceTotalBytes, targetState);
+        if (!backupResumePlan.completedTargetKeys.includes(targetState.identityKey)) {
+          backupResumePlan.completedTargetKeys.push(targetState.identityKey);
+        }
+        backupResumePlan.lastError = '';
+        saveBackupResumePlan(backupResumePlan);
+      } catch (e) {
+        targetState.error = e.message || 'Backup failed';
+        targetState.status = backupJob.stopRequested ? 'paused' : (!isMountedDrive(sourceDrive) || !isMountedDrive(destDrive) ? 'waiting' : 'error');
+        backupJob.lastError = targetState.error;
+        if (targetState.status === 'waiting') backupJob.waitingForDrives = true;
+        if (targetState.status === 'error') {
+          backupResumePlan.lastError = targetState.error;
+          backupResumePlan.autoResume = false;
+          saveBackupResumePlan(backupResumePlan);
+        }
+        try {
+          const root = resumableBackupRoot(destDrive.mount, sourceIdentity);
+          const manifest = readResumableManifest(root, sourceDrive, destDrive);
+          setTargetManifestProgress(root, manifest, targetState);
+        } catch (_) {}
+        if (backupJob.stopRequested || !isMountedDrive(sourceDrive)) break;
+      }
+    }
+  } catch (e) {
+    backupJob.lastError = e.message || 'Backup failed';
+    if (backupJob.stopRequested) backupJob.status = 'paused';
+    else if (!isMountedDrive(sourceDrive)) {
+      backupJob.status = 'waiting';
+      backupJob.waitingForDrives = true;
+      if (backupResumePlan) backupResumePlan.autoResume = true;
+    } else {
+      backupJob.status = 'error';
+      if (backupResumePlan) backupResumePlan.autoResume = false;
+    }
+    if (backupResumePlan) {
+      backupResumePlan.lastError = backupJob.lastError;
+      saveBackupResumePlan(backupResumePlan);
+    }
+  } finally {
+    backupJob.running = false;
+    backupJob.activeStreams = [];
+    backupJob.currentFile = '';
+    backupJob.currentTarget = '';
+    backupJob.activeChunkBytes = 0;
+    updateBackupTotals();
 
-    proc.on('close', (code) => {
-      clearInterval(timer);
-      backupJob.tarProc = null;
-      backupJob.running = false;
+    const allComplete = backupResumePlan && backupResumePlan.targetIdentities.every(k => backupResumePlan.completedTargetKeys.includes(k));
+    const anyWaiting = backupJob.targets.some(t => t.status === 'waiting');
+    const anyError = backupJob.targets.some(t => t.status === 'error');
+    if (allComplete) {
+      backupJob.status = 'completed';
+      backupJob.waitingForDrives = false;
+      backupJob.lastError = '';
+      backupJob.lastCompletedAt = new Date().toISOString();
+      saveBackupResumePlan(null);
+      backupResumePlan = null;
+    } else if (backupJob.stopRequested) {
+      backupJob.status = 'paused';
+      backupJob.waitingForDrives = false;
+    } else if (anyWaiting || !backupResumePlan || backupResumePlan.autoResume) {
+      backupJob.status = 'waiting';
+      backupJob.waitingForDrives = true;
+    } else if (anyError) {
+      backupJob.status = 'error';
+    }
+  }
+}
 
-      if (code === 0 && fs.existsSync(archivePath)) {
-        backupJob.done = 100;
-        backupJob.lastArchive = archivePath;
-        backupJob.currentFile = '';
-        const st = fs.statSync(archivePath);
+async function restoreResumableBackup(backupDrive, sourceIdentity, targetDrive) {
+  if (!isMountedDrive(backupDrive) || !isMountedDrive(targetDrive)) throw new Error('Backup and restore drives must both be mounted');
+  if (stableDriveKey(backupDrive) === stableDriveKey(targetDrive)) throw new Error('Choose a restore drive different from the backup drive');
+  const root = resumableBackupRoot(backupDrive.mount, sourceIdentity);
+  const manifestPath = path.join(root, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) throw new Error('No resumable backup manifest found on this drive');
+  const manifest = readResumableManifest(root, { name: manifestPath, identityKey: sourceIdentity }, backupDrive);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const restoreRoot = path.join(targetDrive.mount, 'hcdave-restored', stamp);
+  fs.mkdirSync(restoreRoot, { recursive: true });
+  backupRestoreJob = { running: true, currentFile: '', bytesDone: 0, totalBytes: 0, filesDone: 0, filesTotal: 0, startedAt: new Date().toISOString(), restoreRoot, lastError: '' };
 
-        const index = readBackupIndex(dstDrive.mount);
-        index.unshift({
-          id: timestamp,
-          name: archiveName,
-          path: archivePath,
-          sourceDriveId: srcDrive.id,
-          sourceDriveName: srcDrive.name,
-          destDriveId: dstDrive.id,
-          createdAt: new Date().toISOString(),
-          size: st.size,
-          formattedSize: formatSize(st.size)
+  const entries = Object.entries(manifest.files || {}).filter(([_, e]) => e && e.current);
+  backupRestoreJob.filesTotal = entries.length;
+  backupRestoreJob.totalBytes = entries.reduce((n, [, e]) => n + (Number(e.current.sourceSize) || 0), 0);
+
+  try {
+    for (const [rel, entry] of entries) {
+      if (!isMountedDrive(backupDrive) || !isMountedDrive(targetDrive)) throw new Error('Backup or restore drive disconnected');
+      if (rel.split('/').some(p => p === '..' || p === '.')) throw new Error('Unsafe path in backup manifest');
+      const version = entry.current;
+      const outPath = path.resolve(restoreRoot, ...rel.split('/'));
+      if (!outPath.startsWith(path.resolve(restoreRoot) + path.sep)) throw new Error('Unsafe path in backup manifest');
+      if (!versionIsComplete(root, version, { relativePath: rel, size: version.sourceSize, mtimeMs: version.sourceMtimeMs })) {
+        throw new Error('Backup chunks are incomplete or invalid for ' + rel);
+      }
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      backupRestoreJob.currentFile = rel;
+      let first = true;
+      for (const ch of version.chunks) {
+        const inPath = safeChunkPath(root, ch);
+        await pipeline(fs.createReadStream(inPath), zlib.createGunzip(), fs.createWriteStream(outPath, { flags: first ? 'w' : 'a' }));
+        first = false;
+        backupRestoreJob.bytesDone += ch.sourceBytes;
+      }
+      backupRestoreJob.filesDone++;
+    }
+    backupRestoreJob.currentFile = '';
+    backupRestoreJob.running = false;
+    return { restoreRoot };
+  } catch (e) {
+    backupRestoreJob.running = false;
+    backupRestoreJob.lastError = e.message;
+    throw e;
+  }
+}
+
+function getResumableBackupStatuses() {
+  const result = [];
+  for (const dest of getMountedDrives()) {
+    if (!isMountedDrive(dest)) continue;
+    const base = path.join(dest.mount, 'hcdave-backups', 'resumable');
+    let dirs = [];
+    try { dirs = fs.readdirSync(base, { withFileTypes: true }).filter(d => d.isDirectory()); }
+    catch (_) { continue; }
+    for (const dir of dirs) {
+      const p = path.join(base, dir.name, 'manifest.json');
+      try {
+        const m = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const run = m.lastRun || {};
+        result.push({
+          sourceIdentity: m.sourceIdentity,
+          sourceName: m.sourceDriveName || 'Source drive',
+          destinationIdentity: stableDriveKey(dest),
+          destinationDriveId: dest.id,
+          destinationName: dest.name,
+          status: run.status || 'unknown',
+          bytesDone: Number(run.bytesDone) || 0,
+          totalBytes: Number(run.totalBytes) || 0,
+          filesDone: Number(run.filesDone) || 0,
+          filesTotal: Number(run.filesTotal) || 0,
+          updatedAt: m.updatedAt || null,
+          completedAt: run.completedAt || null,
+          rootKey: dir.name
         });
-        writeBackupIndex(dstDrive.mount, index);
-        console.log(`✅ Backup complete: ${archivePath} (${formatSize(st.size)})`);
-      } else {
-        backupJob.lastError = `Backup process exited with code ${code}`;
-        console.error('Backup failed:', backupJob.lastError);
-      }
-      resolve();
-    });
-
-    proc.on('error', (err) => {
-      clearInterval(timer);
-      backupJob.tarProc = null;
-      backupJob.running = false;
-      backupJob.lastError = err.message;
-      resolve();
-    });
-  });
+      } catch (_) {}
+    }
+  }
+  return result.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
 }
 
-async function restoreBackupJob(archivePath, targetDriveId) {
-  const drives = getMountedDrives();
-  const tgtDrive = drives.find(d => d.id === targetDriveId);
-  if (!tgtDrive) throw new Error('Target restore drive not found');
-  if (!fs.existsSync(archivePath)) throw new Error('Backup archive file not found');
-
-  return new Promise((resolve, reject) => {
-    const proc = spawn('tar', ['-xzf', archivePath, '-C', tgtDrive.mount]);
-    proc.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Restore failed with exit code ${code}`));
-    });
-    proc.on('error', reject);
-  });
+async function tryResumePendingBackup() {
+  if (backupResumeAttemptRunning || backupJob.running || !backupResumePlan || !backupResumePlan.autoResume) return;
+  const pending = planPendingTargetKeys(backupResumePlan);
+  if (!pending.length) return;
+  const src = resolveMountedDrive(backupResumePlan.sourceIdentity);
+  if (!isMountedDrive(src)) return;
+  if (!pending.some(k => isMountedDrive(resolveMountedDrive(k)))) return;
+  backupResumeAttemptRunning = true;
+  try {
+    await runBackupJob(backupResumePlan.sourceIdentity, pending, { existingPlan: true });
+  } catch (e) {
+    console.error('[Backup] Automatic resume failed:', e.message);
+  } finally {
+    backupResumeAttemptRunning = false;
+  }
 }
+setInterval(() => { tryResumePendingBackup().catch(e => console.error('[Backup] Resume scheduler:', e.message)); }, 10000);
 
-// Nightly cron for backup (checks every minute)
+// Nightly backup scheduler.
 setInterval(() => {
-  if (!backupSchedule.enabled) return;
+  if (!backupSchedule.enabled || backupJob.running) return;
   const now = new Date();
-  const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
   if (hhmm !== backupSchedule.startTime) return;
   const lastRun = backupSchedule.lastRun ? new Date(backupSchedule.lastRun) : null;
   if (lastRun && (Date.now() - lastRun.getTime()) < 60000) return;
-
-  console.log(`⏰ Nightly backup triggered at ${hhmm}`);
   backupSchedule.lastRun = new Date().toISOString();
   saveBackupSchedule();
 
-  if (backupSchedule.sourceDriveId && backupSchedule.destDriveId) {
-    runBackupJob(backupSchedule.sourceDriveId, backupSchedule.destDriveId).catch(console.error);
+  const srcKey = backupSchedule.sourceDriveId;
+  const keys = Array.isArray(backupSchedule.destDriveIds) && backupSchedule.destDriveIds.length
+    ? backupSchedule.destDriveIds
+    : (backupSchedule.destDriveId ? [backupSchedule.destDriveId] : []);
+  if (srcKey && keys.length) {
+    backupResumePlan = {
+      version: 1,
+      sourceIdentity: srcKey,
+      sourceDriveName: '',
+      targetIdentities: keys.slice(),
+      completedTargetKeys: [],
+      autoResume: true,
+      createdAt: new Date().toISOString(),
+      lastError: ''
+    };
+    saveBackupResumePlan(backupResumePlan);
+    runBackupJob(srcKey, keys, { existingPlan: true }).catch(e => console.error('[Backup] Scheduled run:', e.message));
   } else {
     const drives = getMountedDrives();
-    if (drives.length >= 2) {
-      const dest = drives.find(d => d.role && d.role.toLowerCase() === 'backup') || drives[1];
-      const src = drives.find(d => d.id !== dest.id) || drives[0];
-      runBackupJob(src.id, dest.id).catch(console.error);
+    const src = drives.find(d => d.role && d.role.toLowerCase() === 'master') || drives[0];
+    const destinations = drives.filter(d => d.id !== src?.id && d.role && d.role.toLowerCase() === 'backup');
+    if (src && destinations.length) {
+      const srcKeyResolved = stableDriveKey(src);
+      const destKeys = destinations.map(stableDriveKey);
+      backupResumePlan = {
+        version: 1, sourceIdentity: srcKeyResolved, sourceDriveName: src.name,
+        targetIdentities: destKeys, completedTargetKeys: [], autoResume: true,
+        createdAt: new Date().toISOString(), lastError: ''
+      };
+      saveBackupResumePlan(backupResumePlan);
+      runBackupJob(srcKeyResolved, destKeys, { existingPlan: true }).catch(e => console.error('[Backup] Scheduled run:', e.message));
     }
   }
 }, 60000);
@@ -3636,73 +4258,184 @@ setInterval(() => {
 // GET /api/backup/status
 app.get('/api/backup/status', rateLimitAuth, auth, (_, res) => {
   const archives = getAllBackupArchives();
+  const safeJob = {
+    running: backupJob.running,
+    status: backupJob.status,
+    sourceDriveId: backupJob.sourceDriveId,
+    sourceIdentity: backupJob.sourceIdentity,
+    sourceDriveName: backupJob.sourceDriveName,
+    destDriveId: backupJob.destDriveId,
+    destDriveIds: backupJob.destDriveIds,
+    currentTarget: backupJob.currentTarget,
+    currentFile: backupJob.currentFile,
+    totalBytes: backupJob.totalBytes,
+    bytesDone: backupJob.bytesDone,
+    percent: backupJob.percent || 0,
+    speedBytesPerSec: backupJob.speedBytesPerSec,
+    etaSeconds: backupJob.etaSeconds,
+    filesTotal: backupJob.filesTotal,
+    filesDone: backupJob.filesDone,
+    startedAt: backupJob.startedAt,
+    lastCompletedAt: backupJob.lastCompletedAt,
+    lastArchive: backupJob.lastArchive,
+    lastError: backupJob.lastError,
+    waitingForDrives: backupJob.waitingForDrives,
+    targets: backupJob.targets.map(t => ({
+      identityKey: t.identityKey,
+      driveId: t.driveId,
+      name: t.name,
+      status: t.status,
+      bytesDone: t.bytesDone || 0,
+      totalBytes: t.totalBytes || 0,
+      filesDone: t.filesDone || 0,
+      filesTotal: t.filesTotal || 0,
+      error: t.error || ''
+    }))
+  };
   res.json({
-    job: {
-      running:       backupJob.running,
-      sourceDriveId: backupJob.sourceDriveId,
-      destDriveId:   backupJob.destDriveId,
-      currentFile:   backupJob.currentFile,
-      total:         backupJob.total,
-      done:          backupJob.done,
-      startedAt:     backupJob.startedAt,
-      lastArchive:   backupJob.lastArchive,
-      lastError:     backupJob.lastError,
-    },
+    job: safeJob,
     schedule: backupSchedule,
     archives,
+    mirrors: getResumableBackupStatuses(),
+    restore: backupRestoreJob,
+    resumePlan: backupResumePlan ? {
+      sourceIdentity: backupResumePlan.sourceIdentity,
+      targetIdentities: backupResumePlan.targetIdentities,
+      completedTargetKeys: backupResumePlan.completedTargetKeys,
+      autoResume: backupResumePlan.autoResume
+    } : null
   });
 });
 
 // POST /api/backup/start
 app.post('/api/backup/start', rateLimitAuth, auth, (req, res) => {
-  const { sourceDriveId, destDriveId } = req.body || {};
-  if (!sourceDriveId || !destDriveId) {
-    return res.status(400).json({ error: 'sourceDriveId and destDriveId required' });
+  const { sourceDriveId, destDriveId, destDriveIds } = req.body || {};
+  const requested = Array.isArray(destDriveIds) ? destDriveIds : (destDriveId ? [destDriveId] : []);
+  if (!sourceDriveId || !requested.length) return res.status(400).json({ error: 'Select a source and at least one backup destination' });
+  if (backupJob.running) return res.status(409).json({ error: 'A backup job is already running' });
+
+  const source = resolveMountedDrive(sourceDriveId);
+  if (!source) return res.status(404).json({ error: 'Source drive not mounted' });
+  const sourceIdentity = stableDriveKey(source);
+  const targets = [];
+  for (const key of requested) {
+    const d = resolveMountedDrive(key);
+    if (!d) return res.status(404).json({ error: 'Selected backup drive is not mounted: ' + key });
+    if (stableDriveKey(d) === sourceIdentity || d.id === source.id) return res.status(400).json({ error: 'Source and backup destinations must be different physical drives' });
+    if (!targets.some(t => stableDriveKey(t) === stableDriveKey(d))) targets.push(d);
   }
-  if (backupJob.running) {
-    return res.status(409).json({ error: 'A backup job is already running' });
+  const targetKeys = targets.map(stableDriveKey);
+  const canResumeSame = backupResumePlan &&
+    backupResumePlan.sourceIdentity === sourceIdentity &&
+    targetKeys.length === backupResumePlan.targetIdentities.length &&
+    targetKeys.every(k => backupResumePlan.targetIdentities.includes(k));
+  if (!canResumeSame) {
+    backupResumePlan = {
+      version: 1,
+      sourceIdentity,
+      sourceDriveName: source.name,
+      targetIdentities: targetKeys,
+      completedTargetKeys: [],
+      autoResume: true,
+      createdAt: new Date().toISOString(),
+      lastError: ''
+    };
+    saveBackupResumePlan(backupResumePlan);
+  } else {
+    backupResumePlan.autoResume = true;
+    saveBackupResumePlan(backupResumePlan);
   }
-  // Start in background
-  runBackupJob(sourceDriveId, destDriveId).catch(console.error);
-  res.json({ success: true, message: 'Backup job started' });
+  runBackupJob(sourceIdentity, targetKeys, { existingPlan: true }).catch(e => {
+    console.error('[Backup] Start error:', e.message);
+    backupJob.running = false;
+    backupJob.status = 'error';
+    backupJob.lastError = e.message;
+  });
+  res.json({ success: true, message: 'Resumable backup started. Completed chunks and files will be reused on restart.', destDriveIds: targetKeys });
 });
 
 // POST /api/backup/stop
 app.post('/api/backup/stop', rateLimitAuth, auth, (_, res) => {
-  if (backupJob.tarProc) {
-    try { backupJob.tarProc.kill('SIGTERM'); } catch (_) {}
-    backupJob.tarProc = null;
+  backupJob.stopRequested = true;
+  if (backupResumePlan) {
+    backupResumePlan.autoResume = false;
+    backupResumePlan.lastError = 'Paused by user';
+    try { saveBackupResumePlan(backupResumePlan); } catch (_) {}
   }
-  backupJob.running = false;
-  res.json({ success: true, message: 'Backup job stopped' });
+  for (const stream of backupJob.activeStreams) {
+    try { stream.destroy(new Error('Backup paused by user')); } catch (_) {}
+  }
+  res.json({ success: true, message: 'Backup paused. Completed chunks are saved; start again to resume.' });
 });
 
-// POST /api/backup/restore
+// POST /api/backup/restore-mirror
+app.post('/api/backup/restore-mirror', rateLimitAuth, auth, (req, res) => {
+  const { backupDriveId, sourceIdentity, targetDriveId } = req.body || {};
+  const backupDrive = resolveMountedDrive(backupDriveId);
+  const targetDrive = resolveMountedDrive(targetDriveId);
+  if (!backupDrive || !targetDrive || !sourceIdentity) return res.status(400).json({ error: 'Select the backup drive, source identity, and restore target' });
+  if (backupRestoreJob.running) return res.status(409).json({ error: 'A restore is already running' });
+  if (backupJob.running) return res.status(409).json({ error: 'Wait until backup has paused or completed before restoring' });
+  if (!isMountedDrive(backupDrive) || !isMountedDrive(targetDrive)) return res.status(400).json({ error: 'Both drives must be mounted' });
+  if (stableDriveKey(backupDrive) === stableDriveKey(targetDrive)) return res.status(400).json({ error: 'Choose a restore drive different from the backup drive' });
+
+  restoreResumableBackup(backupDrive, sourceIdentity, targetDrive).then(result => {
+    backupRestoreJob.restoreRoot = result.restoreRoot;
+    console.log('[Backup] Restore completed to ' + result.restoreRoot);
+  }).catch(e => {
+    backupRestoreJob.lastError = e.message;
+    console.error('[Backup] Restore failed:', e.message);
+  });
+  res.json({ success: true, message: 'Restore started. Files will be extracted into a new hcdave-restored folder; existing files will not be overwritten.' });
+});
+
+// POST /api/backup/restore — legacy .tar.gz archives
 app.post('/api/backup/restore', rateLimitAuth, auth, async (req, res) => {
   const { archivePath, targetDriveId } = req.body || {};
-  if (!archivePath || !targetDriveId) {
-    return res.status(400).json({ error: 'archivePath and targetDriveId required' });
-  }
+  if (!archivePath || !targetDriveId) return res.status(400).json({ error: 'archivePath and targetDriveId required' });
   try {
     await restoreBackupJob(archivePath, targetDriveId);
-    res.json({ success: true, message: 'Backup restored successfully' });
+    res.json({ success: true, message: 'Legacy archive restored successfully' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// Legacy archive restore helper
+async function restoreBackupJob(archivePath, targetDriveId) {
+  const drives = getMountedDrives();
+  const tgtDrive = drives.find(d => d.id === targetDriveId);
+  if (!tgtDrive) throw new Error('Target restore drive not found');
+  if (!fs.existsSync(archivePath)) throw new Error('Backup archive file not found');
+  return new Promise((resolve, reject) => {
+    const proc = spawn('tar', ['-xzf', archivePath, '-C', tgtDrive.mount]);
+    proc.on('close', code => code === 0 ? resolve() : reject(new Error('Restore failed with exit code ' + code)));
+    proc.on('error', reject);
+  });
+}
+
 // POST /api/backup/schedule
 app.post('/api/backup/schedule', rateLimitAuth, auth, (req, res) => {
-  const { enabled, startTime, sourceDriveId, destDriveId } = req.body || {};
+  const { enabled, startTime, sourceDriveId, destDriveId, destDriveIds } = req.body || {};
   if (typeof enabled === 'boolean') backupSchedule.enabled = enabled;
   if (startTime && /^\d{2}:\d{2}$/.test(startTime)) backupSchedule.startTime = startTime;
-  if (sourceDriveId) backupSchedule.sourceDriveId = sourceDriveId;
-  if (destDriveId) backupSchedule.destDriveId = destDriveId;
+  if (sourceDriveId) {
+    const src = resolveMountedDrive(sourceDriveId);
+    backupSchedule.sourceDriveId = src ? stableDriveKey(src) : sourceDriveId;
+  }
+  const requested = Array.isArray(destDriveIds) ? destDriveIds : (destDriveId ? [destDriveId] : []);
+  if (requested.length) {
+    backupSchedule.destDriveIds = requested.map(k => {
+      const d = resolveMountedDrive(k);
+      return d ? stableDriveKey(d) : k;
+    });
+    backupSchedule.destDriveId = backupSchedule.destDriveIds[0] || '';
+  }
   saveBackupSchedule();
   res.json({ success: true, schedule: backupSchedule });
 });
 
-// DELETE /api/backup/archive
+// DELETE /api/backup/archive — legacy archives only
 app.delete('/api/backup/archive', rateLimitAuth, auth, (req, res) => {
   const { archivePath } = req.body || {};
   if (!archivePath) return res.status(400).json({ error: 'archivePath required' });
@@ -3712,9 +4445,7 @@ app.delete('/api/backup/archive', rateLimitAuth, auth, (req, res) => {
     for (const d of drives) {
       const index = readBackupIndex(d.mount);
       const filtered = index.filter(i => i.path !== archivePath);
-      if (filtered.length !== index.length) {
-        writeBackupIndex(d.mount, filtered);
-      }
+      if (filtered.length !== index.length) writeBackupIndex(d.mount, filtered);
     }
     res.json({ success: true });
   } catch (e) {
