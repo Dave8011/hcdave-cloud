@@ -3704,7 +3704,9 @@ function updateBackupTotals() {
     ? Math.max(0, Math.ceil((backupJob.totalBytes - backupJob.bytesDone) / backupJob.speedBytesPerSec))
     : null;
   if (backupJob.totalBytes > 0) backupJob.percent = Math.min(100, Math.max(0, Math.floor((backupJob.bytesDone / backupJob.totalBytes) * 100)));
-  else backupJob.percent = backupJob.filesTotal === 0 ? 100 : 0;
+  else backupJob.percent = backupJob.filesTotal > 0
+    ? Math.min(100, Math.max(0, Math.floor((backupJob.filesDone / backupJob.filesTotal) * 100)))
+    : 100;
 }
 function updateBackupSpeed(bytes) {
   const now = Date.now();
