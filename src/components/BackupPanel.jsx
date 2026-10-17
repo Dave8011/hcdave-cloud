@@ -194,7 +194,9 @@ export function BackupPanel({ drives }) {
 
   const pct = job?.totalBytes > 0
     ? Math.max(0, Math.min(100, Math.floor((Number(job.bytesDone) || 0) / job.totalBytes * 100)))
-    : (Number(job?.percent) || 0);
+    : (job?.filesTotal > 0
+      ? Math.max(0, Math.min(100, Math.floor((Number(job.filesDone) || 0) / job.filesTotal * 100)))
+      : (Number(job?.percent) || 0));
   const hasJob = job && (job.status && job.status !== 'idle' || job.running || job.lastError || job.waitingForDrives);
   const mirrors = status?.mirrors || [];
   const archives = status?.archives || [];
@@ -287,7 +289,9 @@ export function BackupPanel({ drives }) {
           {job.targets?.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 12 }}>
               {job.targets.map(t => {
-                const targetPct = t.totalBytes > 0 ? Math.min(100, Math.floor((t.bytesDone || 0) / t.totalBytes * 100)) : 0;
+                const targetPct = t.totalBytes > 0
+                  ? Math.min(100, Math.floor((t.bytesDone || 0) / t.totalBytes * 100))
+                  : (t.filesTotal > 0 ? Math.min(100, Math.floor((t.filesDone || 0) / t.filesTotal * 100)) : 0);
                 return (
                   <div key={t.identityKey} style={{ padding: '9px 10px', borderRadius: 8, background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)' }}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
