@@ -55,10 +55,25 @@ if (fs.existsSync(envPath)) {
     });
 }
 
+// Resolve the source checkout dynamically so the updater works after recovery or on a normal install.
+function resolveHcdaveRepoDir() {
+  const candidates = [
+    process.env.HCDAVE_REPO_DIR,
+    '/home/root1/hcdave-cloud-recovery',
+    '/home/root1/hcdave-cloud',
+    '/home/dave/dev/drive-wifi',
+  ].filter(Boolean);
+  return candidates.find(repo =>
+    fs.existsSync(path.join(repo, '.git')) &&
+    fs.existsSync(path.join(repo, 'package.json'))
+  ) || null;
+}
+const ACTIVE_REPO_DIR = resolveHcdaveRepoDir();
+
 let GIT_HASH = '';
 let GIT_COUNT = '0';
 // Try to get version from the repository even if we are running in /opt/hcdave-agent
-const repoPaths = [__dirname, '/home/root1/hcdave-cloud-recovery', '/home/dave/dev/drive-wifi'];
+const repoPaths = [__dirname, ...(ACTIVE_REPO_DIR ? [ACTIVE_REPO_DIR] : []), '/home/root1/hcdave-cloud', '/home/dave/dev/drive-wifi'];
 for (const repo of repoPaths) {
   try {
     GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: repo, stdio: 'pipe' }).toString().trim();
@@ -550,7 +565,7 @@ app.get('/health', (_, res) => {
   
   let lastUpdated = 'Unknown';
   try {
-    lastUpdated = execSync('git log -1 --format="%cd - %s" --date=short', { cwd: '/home/root1/hcdave-cloud-recovery', encoding: 'utf8' }).trim();
+    if (ACTIVE_REPO_DIR) lastUpdated = execSync('git log -1 --format="%cd - %s" --date=short', { cwd: ACTIVE_REPO_DIR, encoding: 'utf8' }).trim();
   } catch (_) {}
 
   let scannerVersion = 'Unknown';
@@ -2116,7 +2131,10 @@ app.post('/api/s/:token/verify', (req, res) => {
 // POST /api/update (Update Agent Software via Git)
 app.post('/api/update', rateLimitAuth, auth, (req, res) => {
   try {
-    const repoDir = '/home/root1/hcdave-cloud-recovery';
+    const repoDir = resolveHcdaveRepoDir();
+    if (!repoDir) {
+      return res.status(500).json({ success: false, error: 'Git update failed', detail: 'No valid HC Dave Cloud repository checkout found.' });
+    }
     let pullOutput = '';
     let pullError = '';
 
@@ -2155,8 +2173,11 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
       execSync('test -s "' + repoDir + '/scripts/hcdave-automount.sh" && test -s "' + repoDir + '/scripts/99-hcdave-automount.rules" && test -s "' + repoDir + '/scripts/hcdave-automount@.service"', { stdio: 'ignore' });
       execSync('cp -a "' + repoDir + '/dist" "' + stagedDist + '" && test -s "' + stagedDist + '/index.html"', { stdio: 'ignore' });
 
-      // Back up the live application entry point and dependency manifests.
-      execSync('mkdir -p "' + agentBackup + '" && cp -p "' + destDir + '/server.js" "' + destDir + '/package.json" "' + destDir + '/package-lock.json" "' + agentBackup + '/"', { stdio: 'ignore' });
+      // Back up live app files; package-lock.json may not exist on older installs.
+      execSync('mkdir -p "' + agentBackup + '" && cp -p "' + destDir + '/server.js" "' + destDir + '/package.json" "' + agentBackup + '/"', { stdio: 'ignore' });
+      if (fs.existsSync(path.join(destDir, 'package-lock.json'))) {
+        fs.copyFileSync(path.join(destDir, 'package-lock.json'), path.join(agentBackup, 'package-lock.json'));
+      }
 
       try {
         // Copy application files while preserving live data/configuration.
@@ -2180,7 +2201,10 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
           throw deployErr;
         }
       } catch (deployErr) {
-        execSync('cp -p "' + agentBackup + '/server.js" "' + agentBackup + '/package.json" "' + agentBackup + '/package-lock.json" "' + destDir + '/"', { stdio: 'ignore' });
+        execSync('cp -p "' + agentBackup + '/server.js" "' + agentBackup + '/package.json" "' + destDir + '/"', { stdio: 'ignore' });
+        if (fs.existsSync(path.join(agentBackup, 'package-lock.json'))) {
+          fs.copyFileSync(path.join(agentBackup, 'package-lock.json'), path.join(destDir, 'package-lock.json'));
+        }
         throw deployErr;
       }
 
