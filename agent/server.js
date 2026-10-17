@@ -3850,6 +3850,7 @@ async function backupOneDestination(srcDrive, destDrive, files, sourceTotalBytes
   for (const plan of plans) {
     if (backupJob.stopRequested) throw new Error('Backup paused by user');
     if (!isMountedDrive(srcDrive) || !isMountedDrive(destDrive)) throw new Error('Source or backup drive disconnected');
+    backupJob.currentFile = plan.file.relativePath;
 
     const currentStat = fs.statSync(plan.file.fullPath);
     if (currentStat.size !== plan.file.size || Math.round(currentStat.mtimeMs) !== plan.file.mtimeMs) {
@@ -3868,6 +3869,7 @@ async function backupOneDestination(srcDrive, destDrive, files, sourceTotalBytes
     if (!plan.complete) {
       for (const chunk of plan.version.chunks) {
         if (backupJob.stopRequested) throw new Error('Backup paused by user');
+        backupJob.currentFile = plan.file.relativePath + ' · chunk ' + (chunk.index + 1) + '/' + plan.version.chunks.length;
         if (chunkIsValid(root, chunk)) continue;
         await compressBackupChunk(plan.file.fullPath, plan.file, chunk, root, targetState);
         setTargetManifestProgress(root, manifest, targetState);
@@ -4138,12 +4140,14 @@ async function restoreResumableBackup(backupDrive, sourceIdentity, targetDrive) 
   const manifestPath = path.join(root, 'manifest.json');
   if (!fs.existsSync(manifestPath)) throw new Error('No resumable backup manifest found on this drive');
   const manifest = readResumableManifest(root, { name: manifestPath, identityKey: sourceIdentity }, backupDrive);
+  if (manifest.sourceIdentity !== sourceIdentity) throw new Error('Backup manifest identity does not match the selected source');
+  const entries = Object.entries(manifest.files || {}).filter(([_, e]) => e && e.current);
+  if (!entries.length) throw new Error('This backup has no completed files to restore yet');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const restoreRoot = path.join(targetDrive.mount, 'hcdave-restored', stamp);
   fs.mkdirSync(restoreRoot, { recursive: true });
   backupRestoreJob = { running: true, currentFile: '', bytesDone: 0, totalBytes: 0, filesDone: 0, filesTotal: 0, startedAt: new Date().toISOString(), restoreRoot, lastError: '' };
 
-  const entries = Object.entries(manifest.files || {}).filter(([_, e]) => e && e.current);
   backupRestoreJob.filesTotal = entries.length;
   backupRestoreJob.totalBytes = entries.reduce((n, [, e]) => n + (Number(e.current.sourceSize) || 0), 0);
 
