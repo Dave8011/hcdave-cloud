@@ -2224,7 +2224,7 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
       try {
         // Copy application files while preserving live data/configuration.
         execSync(
-          'find "' + srcDir + '" -maxdepth 1 -type f ! -name ".env" ! -name "shares.json" ! -name "quickdrops.json" ! -name "remote_downloads.json" ! -name "token_response.json" ! -name "drive_roles.json" ! -name "drive_names.json" ! -name "backup_schedule.json" -exec cp -p -t "' + destDir + '/" {} +',
+          'find "' + srcDir + '" -maxdepth 1 -type f ! -name ".env" ! -name "shares.json" ! -name "quickdrops.json" ! -name "remote_downloads.json" ! -name "token_response.json" ! -name "drive_roles.json" ! -name "drive_names.json" ! -name "backup_schedule.json" ! -name "backup_resume.json" -exec cp -p -t "' + destDir + '/" {} +',
           { stdio: 'ignore' }
         );
 
@@ -3803,6 +3803,10 @@ async function backupOneDestination(srcDrive, destDrive, files, sourceTotalBytes
 
     if (entry.current && entry.current.versionKey === key && entry.current.sourceSize === file.size && entry.current.sourceMtimeMs === file.mtimeMs) {
       version = entry.current;
+      if (entry.pending && entry.pending.versionKey !== key) {
+        safeRemoveVersionChunks(root, entry.pending);
+        entry.pending = null;
+      }
       if (!versionIsComplete(root, version, file)) {
         if (!Array.isArray(version.chunks) || version.chunks.length !== versionChunkCount(file)) {
           version = makeBackupVersion(root, file, key);
@@ -3849,6 +3853,14 @@ async function backupOneDestination(srcDrive, destDrive, files, sourceTotalBytes
     }
 
     const wasCompleteAtStart = plan.complete;
+    if (plan.complete && plan.isPending) {
+      const oldCurrent = plan.entry.current;
+      plan.entry.current = plan.version;
+      plan.entry.pending = null;
+      manifest.files[plan.file.relativePath] = plan.entry;
+      setTargetManifestProgress(root, manifest, targetState);
+      if (oldCurrent && oldCurrent.versionKey !== plan.version.versionKey) safeRemoveVersionChunks(root, oldCurrent);
+    }
     if (!plan.complete) {
       for (const chunk of plan.version.chunks) {
         if (backupJob.stopRequested) throw new Error('Backup paused by user');
@@ -4178,7 +4190,9 @@ function getResumableBackupStatuses() {
           destinationIdentity: stableDriveKey(dest),
           destinationDriveId: dest.id,
           destinationName: dest.name,
-          status: run.status || 'unknown',
+          status: run.status === 'running' && !backupJob.running
+            ? (backupResumePlan && backupResumePlan.autoResume ? 'waiting' : 'paused')
+            : (run.status || 'unknown'),
           bytesDone: Number(run.bytesDone) || 0,
           totalBytes: Number(run.totalBytes) || 0,
           filesDone: Number(run.filesDone) || 0,
