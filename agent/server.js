@@ -11,6 +11,9 @@ const execAsync = util.promisify(exec);
 const crypto   = require('crypto');
 const multer   = require('multer');
 const os       = require('os');
+const zlib     = require('zlib');
+const { Transform, Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 
 /* ─────────────────────────────────────────────
    AUTO-INSTALL MISSING DEPENDENCIES
@@ -304,12 +307,43 @@ const tempTokens = new Map();
    ───────────────────────────────────────────── */
 let cachedDrives = [];
 
+const driveNamesFile = path.join(__dirname, 'drive_names.json');
+function readDriveNames() {
+  try {
+    return fs.existsSync(driveNamesFile)
+      ? JSON.parse(fs.readFileSync(driveNamesFile, 'utf8'))
+      : {};
+  } catch (e) {
+    console.error('Failed to read saved drive names:', e.message);
+    return {};
+  }
+}
+function saveDriveNames(names) {
+  const tmp = driveNamesFile + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(names, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, driveNamesFile);
+}
+function normalDriveName(value) {
+  return String(value || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+async function getHardwareSerial(devicePath) {
+  if (!devicePath || !devicePath.startsWith('/dev/')) return '';
+  try {
+    const parent = (await execAsync('lsblk -no PKNAME "' + devicePath + '"', { timeout: 1000 })).stdout.trim();
+    const device = parent ? '/dev/' + parent : devicePath;
+    return (await execAsync('lsblk -ndo SERIAL "' + device + '"', { timeout: 1000 })).stdout.trim();
+  } catch (_) {
+    return '';
+  }
+}
+
 async function updateDrives() {
   const drives = [];
   const searchDirs = ['/mnt', '/media'];
 
   // Read drive roles
   let driveRoles = {};
+  const driveNames = readDriveNames();
   try {
     const rolesPath = path.join(__dirname, 'drive_roles.json');
     if (fs.existsSync(rolesPath)) {
@@ -353,7 +387,7 @@ async function updateDrives() {
         // device as root ('/') is the system disk (e.g. Dell Wyse 8 GB eMMC)
         const rootStat = fs.statSync('/');
         if (stat.dev === rootStat.dev) continue;
-        let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = "", uuid = "";
+        let totalGB = 0, usedGB = 0, freeGB = 0, sourceDev = "", uuid = "", hardwareSerial = "";
         try {
           // 2 s timeout — stale/removed drives hang df indefinitely
           const { stdout } = await execAsync(`df -B1G "${fullPath}" --output=size,used,avail,source 2>/dev/null | tail -n 1`, { timeout: 2000 });
@@ -365,9 +399,10 @@ async function updateDrives() {
           
           if (sourceDev.startsWith('/dev/')) {
             try {
-              const { stdout: blkidOut } = await execAsync(`blkid -s UUID -o value "${sourceDev}"`, { timeout: 1000 });
+              const { stdout: blkidOut } = await execAsync('blkid -s UUID -o value "' + sourceDev + '"', { timeout: 1000 });
               uuid = blkidOut.trim();
             } catch (_) {}
+            hardwareSerial = await getHardwareSerial(sourceDev);
           }
         } catch (_) {}
 
@@ -386,13 +421,18 @@ async function updateDrives() {
           }
         }
         
-        const stableId = uuid || `drive-${encodeURIComponent(sub)}`;
-        const role = driveRoles[stableId] || driveRoles[`drive-${encodeURIComponent(sub)}`] || null;
+        const stableId = uuid || 'drive-' + encodeURIComponent(sub);
+        const identityKey = hardwareSerial
+          ? 'serial:' + hardwareSerial
+          : (uuid ? 'uuid:' + uuid : stableId);
+        const role = driveRoles[identityKey] || driveRoles[stableId] || driveRoles['drive-' + encodeURIComponent(sub)] || null;
+        const savedName = driveNames[identityKey] || (uuid ? driveNames['uuid:' + uuid] : '') || null;
 
         drives.push({
           id:      stableId,
           uuid:    uuid,
-          name:    sub.replace(/[_-]+/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          identityKey,
+          name:    savedName || normalDriveName(sub),
           mount:   fullPath,
           type:    isSSD ? 'SSD' : 'HDD',
           role:    role,
@@ -745,34 +785,36 @@ app.post('/api/drive-roles', rateLimitAuth, auth, (req, res) => {
 });
 
 
-// POST /api/drives/rename
+// POST /api/drives/rename — save a name against stable drive identity, never rename/unmount its mount point.
 app.post('/api/drives/rename', rateLimitAuth, auth, (req, res) => {
-  const { oldMount, newName } = req.body || {};
-  if (!oldMount || !newName) return res.status(400).json({ error: 'Parameters required' });
-  if (!/^[a-zA-Z0-9_-]+$/.test(newName)) {
-    return res.status(400).json({ error: 'Invalid characters in new name (use letters, numbers, dash, underscore)' });
+  const { oldMount, newName, identityKey, driveId, uuid } = req.body || {};
+  const name = String(newName || '').trim();
+  if (!name) return res.status(400).json({ error: 'New drive name is required' });
+  if (!/^[a-zA-Z0-9 _-]+$/.test(name)) {
+    return res.status(400).json({ error: 'Use only letters, numbers, spaces, hyphens, and underscores' });
   }
 
-  res.json({ success: true });
-  
-  setTimeout(() => {
-    const script = `
-      OLD_PATH="${oldMount}"
-      NEW_NAME="${newName}"
-      if [ ! -d "$OLD_PATH" ]; then exit 1; fi
-      NEW_PATH="$(dirname "\$OLD_PATH")/$NEW_NAME"
-      umount "$OLD_PATH" 2>/dev/null
-      mv "$OLD_PATH" "$NEW_PATH"
-      sed -i "s|\$OLD_PATH|\$NEW_PATH|g" /etc/fstab
-      mount -a
-      systemctl restart hcdave-agent
-    `;
-    require('child_process').exec(`sudo bash -c '${script}'`, (err, stdout, stderr) => {
-       console.log('Rename script output:', stdout, stderr);
-    });
-  }, 1000);
-});
+  const drive = cachedDrives.find(d =>
+    (driveId && d.id === driveId) ||
+    (uuid && d.uuid === uuid) ||
+    (oldMount && d.mount === oldMount)
+  );
+  const key = identityKey || drive?.identityKey || (uuid ? 'uuid:' + uuid : (drive?.uuid ? 'uuid:' + drive.uuid : ''));
+  if (!key || !drive) {
+    return res.status(404).json({ error: 'Drive not found. Refresh the drive list and try again.' });
+  }
 
+  try {
+    const names = readDriveNames();
+    names[key] = name;
+    if (drive.uuid) names['uuid:' + drive.uuid] = name;
+    saveDriveNames(names);
+    updateDrives();
+    res.json({ success: true, name, identityKey: key, message: 'Drive display name saved. Mount path was not changed.' });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to save drive name: ' + e.message });
+  }
+});
 // GET /api/files
 app.get('/api/files', rateLimitAuth, auth, async (req, res) => {
   const drives     = getMountedDrives();
@@ -2182,7 +2224,7 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
       try {
         // Copy application files while preserving live data/configuration.
         execSync(
-          'find "' + srcDir + '" -maxdepth 1 -type f ! -name ".env" ! -name "shares.json" ! -name "quickdrops.json" ! -name "remote_downloads.json" ! -name "token_response.json" ! -name "drive_roles.json" -exec cp -p -t "' + destDir + '/" {} +',
+          'find "' + srcDir + '" -maxdepth 1 -type f ! -name ".env" ! -name "shares.json" ! -name "quickdrops.json" ! -name "remote_downloads.json" ! -name "token_response.json" ! -name "drive_roles.json" ! -name "drive_names.json" ! -name "backup_schedule.json" -exec cp -p -t "' + destDir + '/" {} +',
           { stdio: 'ignore' }
         );
 
