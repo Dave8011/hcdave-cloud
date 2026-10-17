@@ -3821,6 +3821,7 @@ async function backupOneDestination(srcDrive, destDrive, files, sourceTotalBytes
       version = entry.pending;
       isPending = true;
     } else {
+      if (entry.pending) safeRemoveVersionChunks(root, entry.pending);
       version = makeBackupVersion(root, file, key);
       entry.pending = version;
       isPending = true;
@@ -4041,6 +4042,8 @@ async function runBackupJob(sourceKey, targetKeys, options) {
 
     for (let i = 0; i < backupJob.targets.length; i++) {
       const targetState = backupJob.targets[i];
+      targetState.totalBytes = sourceTotalBytes;
+      targetState.filesTotal = files.length;
       if (backupResumePlan.completedTargetKeys.includes(targetState.identityKey)) {
         targetState.status = 'completed';
         targetState.bytesDone = sourceTotalBytes;
@@ -5679,6 +5682,14 @@ app.post('/api/quickdrop/:token/upload', (req, res) => {
 module.exports = {
   app,
   server,
+  BACKUP_CHUNK_BYTES,
+  backupVersionKey,
+  makeBackupVersion,
+  safeChunkPath,
+  chunkIsValid,
+  versionIsComplete,
+  versionCompletedBytes,
+  shouldExcludeBackupEntry,
   safePath,
   verifySafeContainment,
   sanitizeFilename,
