@@ -157,14 +157,14 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
   const executeRename = async () => {
     if (!renameTarget) return;
     setIsRenaming(true);
-    setRenameMsg('Renaming drive and restarting server...');
+    setRenameMsg('Saving drive display name against its stable identity...');
     const res = await StorageService.renameDrive(renameTarget.oldMount, renameTarget.newName);
     if (res.error) {
       setRenameMsg('❌ ' + res.error);
       setIsRenaming(false);
     } else {
-      setRenameMsg('✅ Rename successful! Reloading page...');
-      setTimeout(() => window.location.reload(), 5000);
+      setRenameMsg('✅ Display name saved permanently. Refreshing drive list...');
+      setTimeout(() => window.location.reload(), 1500);
     }
   };
 
@@ -518,8 +518,8 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {[...drives].sort((a, b) => {
-                        const roleA = driveRoles[a.uuid || a.id] || '';
-                        const roleB = driveRoles[b.uuid || b.id] || '';
+                        const roleA = driveRoles[a.identityKey || a.uuid || a.id] || '';
+                        const roleB = driveRoles[b.identityKey || b.uuid || b.id] || '';
                         const roleOrder = { 'Master': 1, 'Gallery': 2, 'Portable': 3, 'Backup': 4, 'Cache': 5, 'Storage': 6, '': 7 };
                         return (roleOrder[roleA] || 99) - (roleOrder[roleB] || 99);
                       }).map((d) => (
@@ -598,8 +598,8 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
                             <select
                               className="custom-select custom-select-sm"
                               aria-label={`Role for drive ${d.name}`}
-                              value={driveRoles[d.uuid || d.id] || ''}
-                              onChange={e => setDriveRoles({ ...driveRoles, [d.uuid || d.id]: e.target.value })}
+                              value={driveRoles[d.identityKey || d.uuid || d.id] || ''}
+                              onChange={e => setDriveRoles({ ...driveRoles, [d.identityKey || d.uuid || d.id]: e.target.value })}
                             >
                               <option value="">None</option>
                               <option value="Master">Master</option>
@@ -645,14 +645,14 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
               <div style={{ background: 'rgba(245, 158, 11, 0.15)', padding: '10px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <AlertTriangle size={24} />
               </div>
-              <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff' }}>Restart Required</div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff' }}>Save Drive Display Name</div>
             </div>
 
             <div style={{ fontSize: '0.9rem', color: '#e2e8f0', lineHeight: 1.6, marginBottom: 20 }}>
-              Renaming <strong style={{ color: '#fff', background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: 4 }}>{renameTarget?.oldName}</strong> to <strong style={{ color: '#22d3ee', background: 'rgba(34, 211, 238, 0.1)', padding: '2px 6px', borderRadius: 4 }}>{renameTarget?.newName}</strong> requires rebooting the storage service.
+              Renaming <strong style={{ color: '#fff', background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: 4 }}>{renameTarget?.oldName}</strong> to <strong style={{ color: '#22d3ee', background: 'rgba(34, 211, 238, 0.1)', padding: '2px 6px', borderRadius: 4 }}>{renameTarget?.newName}</strong> will be saved as a persistent display name associated with this physical SSD. The filesystem label and mount path will not change.
 
               <div style={{ marginTop: 14, padding: '10px 14px', background: 'rgba(244, 63, 94, 0.1)', borderLeft: '4px solid #f43f5e', borderRadius: '4px', color: '#fda4af', fontSize: '0.82rem', lineHeight: 1.5 }}>
-                <strong style={{ color: '#f43f5e' }}>Warning:</strong> Active file transfers or background video caching will be restarted.
+                <strong style={{ color: '#f43f5e' }}>Warning:</strong> The drive will not be unmounted and the server will not restart.
               </div>
             </div>
 
@@ -681,12 +681,12 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
               </button>
               <button
                 className="btn btn-primary"
-                style={{ background: '#f43f5e', borderColor: '#f43f5e' }}
+                style={{ background: 'var(--indigo)', borderColor: 'var(--indigo)' }}
                 onClick={executeRename}
                 disabled={isRenaming}
               >
                 {isRenaming ? <RefreshCw size={15} className="spin" /> : <Edit2 size={15} />}
-                <span>{isRenaming ? 'Renaming...' : 'Rename & Restart'}</span>
+                <span>{isRenaming ? 'Saving...' : 'Save Name'}</span>
               </button>
             </div>
           </div>
