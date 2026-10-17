@@ -58,7 +58,7 @@ if (fs.existsSync(envPath)) {
 let GIT_HASH = '';
 let GIT_COUNT = '0';
 // Try to get version from the repository even if we are running in /opt/hcdave-agent
-const repoPaths = [__dirname, '/home/root1/hcdave-cloud', '/home/dave/dev/drive-wifi'];
+const repoPaths = [__dirname, '/home/root1/hcdave-cloud-recovery', '/home/dave/dev/drive-wifi'];
 for (const repo of repoPaths) {
   try {
     GIT_HASH = execSync('git rev-parse --short HEAD', { cwd: repo, stdio: 'pipe' }).toString().trim();
@@ -550,7 +550,7 @@ app.get('/health', (_, res) => {
   
   let lastUpdated = 'Unknown';
   try {
-    lastUpdated = execSync('git log -1 --format="%cd - %s" --date=short', { cwd: '/home/root1/hcdave-cloud', encoding: 'utf8' }).trim();
+    lastUpdated = execSync('git log -1 --format="%cd - %s" --date=short', { cwd: '/home/root1/hcdave-cloud-recovery', encoding: 'utf8' }).trim();
   } catch (_) {}
 
   let scannerVersion = 'Unknown';
@@ -2116,7 +2116,7 @@ app.post('/api/s/:token/verify', (req, res) => {
 // POST /api/update (Update Agent Software via Git)
 app.post('/api/update', rateLimitAuth, auth, (req, res) => {
   try {
-    const repoDir = '/home/root1/hcdave-cloud';
+    const repoDir = '/home/root1/hcdave-cloud-recovery';
     let pullOutput = '';
     let pullError = '';
 
@@ -2138,41 +2138,73 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
       return res.status(500).json({ success: false, error: 'Git update failed', detail: pullError });
     }
 
-    // Step 2: Copy agent files — NEVER overwrite .env (has the user's setup password)
-    // and NEVER overwrite shares.json (has all share links).
-    // Use rsync-style exclusion via find+cp to skip those protected files.
-    try {
-      const destDir = '/opt/hcdave-agent';
-      const srcDir  = `${repoDir}/agent`;
-      // Copy everything except .env and shares.json
-      execSync(
-        `find "${srcDir}" -maxdepth 1 -not -name '.env' -not -name 'shares.json' -not -name '.' | xargs -I{} cp -r {} "${destDir}/"`,
-        { stdio: 'ignore' }
-      );
-      
-      // Build and copy frontend
-      console.log('🏗️ Building frontend...');
-      execSync('npm install', { cwd: repoDir, stdio: 'ignore' });
-      execSync('npm run build', { cwd: repoDir, stdio: 'ignore' });
-      execSync(`rm -rf /opt/dist && cp -r "${repoDir}/dist" /opt/`, { stdio: 'ignore' });
-      console.log('📂 Frontend files copied to /opt/dist');
-      console.log('📂 Agent files copied (protected .env and shares.json)');
+    // Step 2: Build and validate before changing live files.
+    const destDir = '/opt/hcdave-agent';
+    const srcDir = path.join(repoDir, 'agent');
+    const deployStamp = String(process.pid) + '-' + Date.now();
+    const stagedDist = '/opt/dist.stage-' + deployStamp;
+    const rollbackDist = '/opt/dist.rollback-' + deployStamp;
+    const agentBackup = '/opt/hcdave-agent.rollback-' + deployStamp;
 
-      // Update system-level scripts
+    try {
+      console.log('🏗️ Building frontend before deployment...');
+      execSync('npm install --no-audit --no-fund', { cwd: repoDir, stdio: 'ignore' });
+      execSync('npm run build', { cwd: repoDir, stdio: 'ignore' });
+      execSync('test -s "' + repoDir + '/dist/index.html" && test -d "' + repoDir + '/dist/assets"', { stdio: 'ignore' });
+      execSync('node --check "' + srcDir + '/server.js"', { stdio: 'ignore' });
+      execSync('test -s "' + repoDir + '/scripts/hcdave-automount.sh" && test -s "' + repoDir + '/scripts/99-hcdave-automount.rules" && test -s "' + repoDir + '/scripts/hcdave-automount@.service"', { stdio: 'ignore' });
+      execSync('cp -a "' + repoDir + '/dist" "' + stagedDist + '" && test -s "' + stagedDist + '/index.html"', { stdio: 'ignore' });
+
+      // Back up the live application entry point and dependency manifests.
+      execSync('mkdir -p "' + agentBackup + '" && cp -p "' + destDir + '/server.js" "' + destDir + '/package.json" "' + destDir + '/package-lock.json" "' + agentBackup + '/"', { stdio: 'ignore' });
+
+      try {
+        // Copy application files while preserving live data/configuration.
+        execSync(
+          'find "' + srcDir + '" -maxdepth 1 -type f ! -name ".env" ! -name "shares.json" ! -name "quickdrops.json" ! -name "remote_downloads.json" ! -name "token_response.json" ! -name "drive_roles.json" -exec cp -p {} "' + destDir + '/" +',
+          { stdio: 'ignore' }
+        );
+
+        // Swap the validated frontend into place; restore the old version if the swap fails.
+        let previousDistMoved = false;
+        if (fs.existsSync('/opt/dist')) {
+          fs.renameSync('/opt/dist', rollbackDist);
+          previousDistMoved = true;
+        }
+        try {
+          fs.renameSync(stagedDist, '/opt/dist');
+        } catch (deployErr) {
+          if (previousDistMoved && !fs.existsSync('/opt/dist') && fs.existsSync(rollbackDist)) {
+            fs.renameSync(rollbackDist, '/opt/dist');
+          }
+          throw deployErr;
+        }
+      } catch (deployErr) {
+        execSync('cp -p "' + agentBackup + '/server.js" "' + agentBackup + '/package.json" "' + agentBackup + '/package-lock.json" "' + destDir + '/"', { stdio: 'ignore' });
+        throw deployErr;
+      }
+
+      console.log('📂 Frontend deployed from a validated staging directory.');
+      console.log('📂 Agent files copied; live data/configuration files preserved.');
+
+      // Update system-level scripts only after build and deployment checks pass.
       try {
         console.log('⚙️ Updating system-level automount scripts...');
-        execSync(`cp "${repoDir}/scripts/hcdave-automount.sh" /usr/local/bin/hcdave-automount.sh`);
+        execSync('cp "' + repoDir + '/scripts/hcdave-automount.sh" /usr/local/bin/hcdave-automount.sh');
         execSync('chmod +x /usr/local/bin/hcdave-automount.sh');
-        execSync(`cp "${repoDir}/scripts/99-hcdave-automount.rules" /etc/udev/rules.d/99-hcdave-automount.rules`);
-        execSync(`cp "${repoDir}/scripts/hcdave-automount@.service" /etc/systemd/system/hcdave-automount@.service`);
+        execSync('cp "' + repoDir + '/scripts/99-hcdave-automount.rules" /etc/udev/rules.d/99-hcdave-automount.rules');
+        execSync('cp "' + repoDir + '/scripts/hcdave-automount@.service" /etc/systemd/system/hcdave-automount@.service');
         execSync('udevadm control --reload-rules');
         execSync('systemctl daemon-reload');
       } catch (sysErr) {
         console.error('⚠️ Warning: failed to update system-level scripts:', sysErr.message);
       }
     } catch (e) {
-      console.error('❌ Copy agent files failed:', e.message);
-      return res.status(500).json({ success: false, error: 'Failed to copy agent files', detail: e.message });
+      try {
+        if (fs.existsSync(stagedDist)) execSync('rm -rf "' + stagedDist + '"', { stdio: 'ignore' });
+      } catch (cleanupErr) {}
+      console.error('❌ Update preparation/deployment failed:', e.message);
+      return res.status(500).json({ success: false, error: 'Update deployment failed', detail: e.message });
     }
 
     // Step 3: Tell the frontend update was pulled successfully before restarting
