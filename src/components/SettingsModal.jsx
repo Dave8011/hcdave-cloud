@@ -23,7 +23,7 @@ const TAB_GROUPS = [
   {
     group: 'Storage',
     items: [
-      { key: 'drives', label: 'Drives', desc: 'Hardware UUIDs, roles & renaming', Icon: HardDrive },
+      { key: 'drives', label: 'Drives', desc: 'Stable hardware identities, roles & names', Icon: HardDrive },
       { key: 'cache', label: 'Video Cache', desc: 'Background video conversion & cache', Icon: Database, hasBadge: true },
       { key: 'trash', label: 'Recycle Bin', desc: 'Deleted file retention & recovery', Icon: Trash2 },
     ]
@@ -508,7 +508,7 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
                     <span>Permanent Drive Roles &amp; Renaming</span>
                   </div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-2)', marginBottom: 16, lineHeight: 1.6 }}>
-                    Assign permanent roles (Master, Gallery, Portable, Backup, Cache, Storage) to your plugged-in drives. HC Cloud remembers each drive by its unique hardware UUID, persisting through reboots and USB port changes.
+                    Assign permanent roles and display names to connected drives. HC Dave Cloud remembers names by hardware serial where the enclosure exposes one, with filesystem UUID as a fallback. Renaming changes only the saved display name—not the mount path or filesystem label.
                   </div>
 
                   {drives.length === 0 ? (
