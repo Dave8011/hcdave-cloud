@@ -1,0 +1,32 @@
+name: Validate HC Dave Cloud
+
+on:
+  push:
+    branches:
+      - main
+      - feature/resumable-multi-target-backups
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build frontend
+        run: npm run build
+      - name: Install agent dependencies
+        run: npm ci --prefix agent --no-audit --no-fund
+      - name: Check agent JavaScript syntax
+        run: node --check agent/server.js
+      - name: Test backup chunk and manifest safety
+        run: npm run test:backup --prefix agent

@@ -1,1 +1,9 @@
 .env
+shares.json
+quickdrops.json
+remote_downloads.json
+token_response.json
+drive_roles.json
+drive_names.json
+backup_schedule.json
+backup_resume.json

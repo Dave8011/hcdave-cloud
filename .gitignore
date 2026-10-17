@@ -7,3 +7,8 @@ agent/shares.json
 agent/quickdrops.json
 agent/remote_downloads.json
 agent/.env
+agent/token_response.json
+agent/drive_roles.json
+agent/drive_names.json
+agent/backup_schedule.json
+agent/backup_resume.json
