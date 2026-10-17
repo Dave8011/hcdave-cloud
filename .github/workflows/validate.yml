@@ -24,5 +24,9 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Build frontend
         run: npm run build
+      - name: Install agent dependencies
+        run: npm ci --prefix agent --no-audit --no-fund
       - name: Check agent JavaScript syntax
         run: node --check agent/server.js
+      - name: Test backup chunk and manifest safety
+        run: npm run test:backup --prefix agent
