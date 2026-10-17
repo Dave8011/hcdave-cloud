@@ -481,11 +481,12 @@ export class StorageService {
     return r.json();
   }
 
-  static async startBackup(sourceDriveId, destDriveId, schedTime) {
+  static async startBackup(sourceDriveId, destDriveIds, schedTime) {
+    const targetIds = Array.isArray(destDriveIds) ? destDriveIds : (destDriveIds ? [destDriveIds] : []);
     const r = await fetch(`${this.getAgentUrl()}/api/backup/start`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ sourceDriveId, destDriveId, schedTime })
+      body: JSON.stringify({ sourceDriveId, destDriveIds: targetIds, schedTime })
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed to start backup');
@@ -513,11 +514,23 @@ export class StorageService {
     return data;
   }
 
-  static async setBackupSchedule(enabled, startTime, sourceDriveId, destDriveId) {
+  static async restoreMirrorBackup(backupDriveId, sourceIdentity, targetDriveId) {
+    const r = await fetch(`${this.getAgentUrl()}/api/backup/restore-mirror`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ backupDriveId, sourceIdentity, targetDriveId })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to restore resumable backup');
+    return data;
+  }
+
+  static async setBackupSchedule(enabled, startTime, sourceDriveId, destDriveIds) {
+    const targetIds = Array.isArray(destDriveIds) ? destDriveIds : (destDriveIds ? [destDriveIds] : []);
     const r = await fetch(`${this.getAgentUrl()}/api/backup/schedule`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ enabled, startTime, sourceDriveId, destDriveId })
+      body: JSON.stringify({ enabled, startTime, sourceDriveId, destDriveIds: targetIds })
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed to update schedule');
