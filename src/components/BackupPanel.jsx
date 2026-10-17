@@ -121,10 +121,10 @@ export function BackupPanel({ drives }) {
 
   const job = status && status.job;
   useEffect(() => {
-    if (!job || (!job.running && !(job.waitingForDrives && status?.resumePlan?.autoResume))) return;
+    if (!job || (!job.running && !(job.waitingForDrives && status?.resumePlan?.autoResume) && !status?.restore?.running)) return;
     const id = setInterval(refresh, 2500);
     return () => clearInterval(id);
-  }, [job?.running, job?.waitingForDrives, status?.resumePlan?.autoResume, refresh]);
+  }, [job?.running, job?.waitingForDrives, status?.resumePlan?.autoResume, status?.restore?.running, refresh]);
 
   const handleStartBackup = async () => {
     if (!sourceDrive) { setError('Select the source drive'); return; }
