@@ -52,9 +52,17 @@ export function QuickDropPage({ token, onGoHome }) {
         setError('This QuickDrop link has expired.');
         return;
       }
-      const mins = Math.floor(diff / (60 * 1000));
-      const secs = Math.floor((diff % (60 * 1000)) / 1000);
-      setTimeLeft(`${mins}m ${secs}s`);
+      const totalSec = Math.floor(diff / 1000);
+      const h = Math.floor(totalSec / 3600);
+      const m = Math.floor((totalSec % 3600) / 60);
+      const s = totalSec % 60;
+      if (h > 0) {
+        setTimeLeft(`${h}h ${m}m ${s}s left`);
+      } else if (m > 0) {
+        setTimeLeft(`${m}m ${s}s left`);
+      } else {
+        setTimeLeft(`${s}s left`);
+      }
     };
 
     updateTimer();

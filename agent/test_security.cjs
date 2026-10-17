@@ -310,6 +310,14 @@ async function main() {
           'Accept-Ranges': 'bytes'
         });
         res.end(payload);
+      } else if (req.url === '/image-test') {
+        const payload = Buffer.from('JPEG_DATA_MOCK');
+        res.writeHead(200, {
+          'Content-Type': 'image/jpeg',
+          'Content-Length': payload.length,
+          'Accept-Ranges': 'bytes'
+        });
+        res.end(payload);
       } else {
         res.writeHead(404);
         res.end();
@@ -380,6 +388,59 @@ async function main() {
       assert.strictEqual(task.filename, 'calc.exe');
       assert.strictEqual(path.resolve(task.targetFile), path.resolve(dlDest, 'calc.exe'));
       assert.strictEqual(fs.existsSync(task.targetFile), true);
+    });
+
+    await runTest('Downloader automatically infers extension from Content-Type when filename lacks extension', async () => {
+      const dlDest = path.join(testRoot, 'dl_dest_img');
+      fs.mkdirSync(dlDest, { recursive: true });
+
+      const task = {
+        id: 'test_dl_img_infer',
+        url: `http://127.0.0.1:${mockPort}/image-test`,
+        pinnedIp: '127.0.0.1',
+        pinnedFamily: 4,
+        filename: 'images',
+        destDir: dlDest,
+        targetFile: path.join(dlDest, 'images'),
+        partFile: path.join(dlDest, 'images.part'),
+        status: 'pending',
+        downloadedBytes: 0,
+        totalBytes: 0
+      };
+
+      await startDownloadTask(task);
+      await new Promise(r => setTimeout(r, 600));
+
+      assert.strictEqual(task.status, 'completed');
+      assert.strictEqual(task.filename, 'images.jpg');
+      assert.strictEqual(fs.existsSync(path.join(dlDest, 'images.jpg')), true);
+    });
+
+    await runTest('Downloader preserves user-specified custom filename and does not overwrite it with Content-Type or Content-Disposition', async () => {
+      const dlDest = path.join(testRoot, 'dl_dest_custom');
+      fs.mkdirSync(dlDest, { recursive: true });
+
+      const task = {
+        id: 'test_dl_custom_name',
+        url: `http://127.0.0.1:${mockPort}/image-test`,
+        pinnedIp: '127.0.0.1',
+        pinnedFamily: 4,
+        filename: 'my_custom_photo.png',
+        userSpecifiedFilename: true,
+        destDir: dlDest,
+        targetFile: path.join(dlDest, 'my_custom_photo.png'),
+        partFile: path.join(dlDest, 'my_custom_photo.png.part'),
+        status: 'pending',
+        downloadedBytes: 0,
+        totalBytes: 0
+      };
+
+      await startDownloadTask(task);
+      await new Promise(r => setTimeout(r, 600));
+
+      assert.strictEqual(task.status, 'completed');
+      assert.strictEqual(task.filename, 'my_custom_photo.png');
+      assert.strictEqual(fs.existsSync(path.join(dlDest, 'my_custom_photo.png')), true);
     });
 
     runTest('parseContentDispositionFilename adheres to RFC 6266 & RFC 5987 priorities and encodings', () => {
@@ -770,6 +831,26 @@ async function main() {
       uploadedCount: 0,
       uploadedBytes: 0,
       uploadedFiles: []
+    });
+
+    await runTest('POST /api/quickdrop/:token/extend adjusts session expiry in place without invalidating token', async () => {
+      const origExpires = quickDropSessions.get(liveToken).expiresAt;
+      const res = await httpRequest({
+        port: serverPort,
+        path: `/api/quickdrop/${liveToken}/extend`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.AUTH_PASSWORD || 'ChangeMe@2024'}`
+        },
+        body: JSON.stringify({ extendMinutes: 45 })
+      });
+
+      assert.strictEqual(res.statusCode, 200);
+      assert.strictEqual(res.json.success, true);
+      assert.strictEqual(res.json.token, liveToken);
+      assert.ok(res.json.expiresAt > origExpires);
+      assert.strictEqual(quickDropSessions.get(liveToken).expiresAt, res.json.expiresAt);
     });
 
     await runTest('Hostile HTTP multipart upload (../../../etc/shadow) is sanitized and safely contained', async () => {

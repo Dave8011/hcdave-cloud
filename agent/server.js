@@ -403,7 +403,9 @@ async function updateDrives() {
   }
   disconnectedDrives = newlyDisconnected;
 
-  cachedDrives = drives;
+  const mockDrives = cachedDrives.filter(d => d.id && (d.id.startsWith('test_') || d.id.startsWith('mock_')));
+  cachedDrives.length = 0;
+  cachedDrives.push(...drives, ...mockDrives);
 }
 
 let seenDrivesMap = new Map();
@@ -3866,7 +3868,8 @@ async function validateUrlForSsrf(targetUrl) {
     throw new Error(`DNS resolution failed for hostname "${cleanHost}": ${err.message}`);
   }
 
-  const pinnedRecord = records[0];
+  // Prioritize IPv4 for environments without IPv6 routing; fallback to first record
+  const pinnedRecord = records.find(r => r.family === 4) || records[0];
   return {
     parsedUrl: parsed,
     url: parsed.toString(),
@@ -3890,7 +3893,9 @@ async function startDownloadTask(task) {
   }
 
   const parsed = new URL(task.url);
-  const client = parsed.protocol === 'https:' ? https : http;
+  const client = parsed.protocol === 'https:' 
+    ? (typeof https !== 'undefined' ? https : require('https'))
+    : (typeof http !== 'undefined' ? http : require('http'));
 
   let existingBytes = 0;
   if (fs.existsSync(task.partFile)) {
@@ -3985,9 +3990,10 @@ async function startDownloadTask(task) {
       if (cl) task.totalBytes = parseInt(cl, 10);
     }
 
-    // Response filename handling via Content-Disposition
+    // Response filename handling via Content-Disposition (only if user did not specify explicit custom name)
     const cd = res.headers['content-disposition'];
-    if (cd) {
+    let cdApplied = false;
+    if (cd && !task.userSpecifiedFilename) {
       const rawCdName = parseContentDispositionFilename(cd);
       if (rawCdName) {
         const safeCdName = sanitizeFilename(rawCdName, task.filename || 'download', 250);
@@ -4010,8 +4016,76 @@ async function startDownloadTask(task) {
           task.filename = candidateName;
           task.targetFile = newTarget;
           task.partFile = newPart;
+          cdApplied = true;
         } catch (containErr) {
           console.warn('[Downloader] Malicious Content-Disposition filename blocked:', rawCdName, containErr.message);
+        }
+      }
+    }
+
+    // If filename has no extension, infer extension from Content-Type if available
+    if (!cdApplied && !task.userSpecifiedFilename && !path.extname(task.filename)) {
+      const ctHeader = res.headers['content-type'];
+      if (ctHeader && typeof ctHeader === 'string') {
+        const mime = ctHeader.split(';')[0].trim().toLowerCase();
+        const MIME_MAP = {
+          'image/jpeg': '.jpg',
+          'image/jpg': '.jpg',
+          'image/png': '.png',
+          'image/gif': '.gif',
+          'image/webp': '.webp',
+          'image/svg+xml': '.svg',
+          'image/avif': '.avif',
+          'image/bmp': '.bmp',
+          'image/x-icon': '.ico',
+          'image/vnd.microsoft.icon': '.ico',
+          'image/tiff': '.tiff',
+          'video/mp4': '.mp4',
+          'video/webm': '.webm',
+          'video/x-matroska': '.mkv',
+          'video/quicktime': '.mov',
+          'video/x-msvideo': '.avi',
+          'audio/mpeg': '.mp3',
+          'audio/ogg': '.ogg',
+          'audio/wav': '.wav',
+          'audio/aac': '.aac',
+          'audio/flac': '.flac',
+          'audio/mp4': '.m4a',
+          'application/pdf': '.pdf',
+          'application/zip': '.zip',
+          'application/x-zip-compressed': '.zip',
+          'application/x-tar': '.tar',
+          'application/gzip': '.gz',
+          'application/x-gzip': '.gz',
+          'application/x-7z-compressed': '.7z',
+          'application/x-rar-compressed': '.rar',
+          'application/json': '.json',
+          'application/xml': '.xml',
+          'text/plain': '.txt',
+          'text/html': '.html',
+          'text/csv': '.csv',
+          'text/markdown': '.md'
+        };
+        const ext = MIME_MAP[mime];
+        if (ext) {
+          const newName = `${task.filename}${ext}`;
+          const safeNewName = sanitizeFilename(newName, task.filename, 250);
+          try {
+            verifySafeContainment(task.destDir, safeNewName);
+            const candidateName = getUniqueFilename(task.destDir, safeNewName, 250);
+            verifySafeContainment(task.destDir, candidateName);
+            const newTarget = path.join(task.destDir, candidateName);
+            const newPart = `${newTarget}.part`;
+            verifySafeContainment(task.destDir, newTarget);
+            verifySafeContainment(task.destDir, newPart);
+
+            if (task.partFile && task.partFile !== newPart && fs.existsSync(task.partFile)) {
+              try { fs.renameSync(task.partFile, newPart); } catch (_) {}
+            }
+            task.filename = candidateName;
+            task.targetFile = newTarget;
+            task.partFile = newPart;
+          } catch (_) {}
         }
       }
     }
@@ -4049,6 +4123,15 @@ async function startDownloadTask(task) {
       }
     });
 
+    res.on('error', (err) => {
+      if (task.status === 'paused' || task.status === 'canceled') return;
+      task.status = 'failed';
+      task.error = 'Transfer stream error: ' + err.message;
+      try { writeStream.destroy(); } catch (_) {}
+      activeDownloadReqs.delete(task.id);
+      saveRemoteDownloads();
+    });
+
     res.pipe(writeStream);
 
     writeStream.on('finish', () => {
@@ -4073,6 +4156,17 @@ async function startDownloadTask(task) {
           const hash = crypto.createHash('sha256');
           const fileStream = fs.createReadStream(task.targetFile);
           fileStream.on('data', c => hash.update(c));
+          fileStream.on('error', (streamErr) => {
+            console.warn('[Downloader] Checksum calculation error:', streamErr.message);
+            task.sha256 = null;
+            task.status = 'completed';
+            task.percent = 100;
+            task.speed = 0;
+            task.eta = 0;
+            task.completedAt = Date.now();
+            activeDownloadReqs.delete(task.id);
+            saveRemoteDownloads();
+          });
           fileStream.on('end', () => {
             task.sha256 = hash.digest('hex');
             if (task.expectedHash) {
@@ -4103,10 +4197,20 @@ async function startDownloadTask(task) {
     });
   });
 
+  req.setTimeout(30000, () => {
+    if (task.status === 'downloading' || task.status === 'pending') {
+      req.destroy(new Error('Connection timed out'));
+    }
+  });
+
   req.on('error', (err) => {
     if (task.status === 'paused' || task.status === 'canceled') return;
     task.status = 'failed';
     task.error = 'Network error: ' + err.message;
+    const active = activeDownloadReqs.get(task.id);
+    if (active && active.writeStream) {
+      try { active.writeStream.destroy(); } catch (_) {}
+    }
     activeDownloadReqs.delete(task.id);
     saveRemoteDownloads();
   });
@@ -4169,11 +4273,38 @@ app.post('/api/remote-downloads', rateLimitAuth, auth, async (req, res) => {
 
     // Determine filename
     let finalName = (filename || '').trim();
+    const isUserFilename = Boolean(finalName);
     if (!finalName) {
-      const urlPath = parsedUrl.pathname.replace(/\/+$/, '');
-      finalName = path.basename(urlPath) || 'download';
-      if (!path.extname(finalName) && urlPath.includes('.')) {
-        finalName = 'download';
+      // Check query parameters for explicit filenames (e.g. ?file=test.pdf or ?name=photo.jpg or ?filename=...)
+      const queryCandidates = ['filename', 'file', 'name', 'title', 'document'];
+      for (const qKey of queryCandidates) {
+        const qVal = parsedUrl.searchParams.get(qKey);
+        if (qVal && typeof qVal === 'string' && qVal.trim()) {
+          const baseQ = path.basename(qVal.trim().replace(/\\/g, '/'));
+          if (baseQ && baseQ !== '.' && baseQ !== '..') {
+            finalName = baseQ;
+            break;
+          }
+        }
+      }
+
+      if (!finalName) {
+        const urlPath = parsedUrl.pathname.replace(/\/+$/, '');
+        const pathBase = path.basename(urlPath);
+        if (pathBase && pathBase !== '.' && pathBase !== '..') {
+          finalName = pathBase;
+        } else {
+          finalName = 'download';
+        }
+      }
+
+      // If generic thumbnail or query link (e.g. encrypted-tbn0.gstatic.com/images?q=tbn:...)
+      const tbn = parsedUrl.searchParams.get('q') || parsedUrl.searchParams.get('tbn') || parsedUrl.searchParams.get('id');
+      if (tbn && (finalName === 'images' || finalName === 'image' || finalName === 'thumb' || finalName === 'thumbnail' || finalName === 'download')) {
+        const cleanTbn = tbn.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 24);
+        if (cleanTbn) {
+          finalName = `${finalName}_${cleanTbn}`;
+        }
       }
     }
     // Sanitize filename and enforce destination containment (max 250 bytes to leave 5 bytes for .part)
@@ -4194,6 +4325,7 @@ app.post('/api/remote-downloads', rateLimitAuth, auth, async (req, res) => {
       driveName: drive.name,
       folder: folder,
       filename: finalName,
+      userSpecifiedFilename: isUserFilename,
       destDir: destDir,
       targetFile: targetFile,
       partFile: partFile,
@@ -4392,6 +4524,25 @@ app.post('/api/quickdrop/create', rateLimitAuth, auth, (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+// POST /api/quickdrop/:token/extend (authenticated in-place expiry extension)
+app.post('/api/quickdrop/:token/extend', rateLimitAuth, auth, (req, res) => {
+  const session = quickDropSessions.get(req.params.token);
+  if (!session) return res.status(404).json({ error: 'QuickDrop session not found' });
+  const { expiryMinutes, extendMinutes } = req.body || {};
+  if (extendMinutes) {
+    session.expiresAt = Math.max(Date.now(), session.expiresAt) + (parseInt(extendMinutes, 10) || 30) * 60 * 1000;
+  } else if (expiryMinutes) {
+    session.expiresAt = Date.now() + (parseInt(expiryMinutes, 10) || 60) * 60 * 1000;
+  }
+  saveQuickDrops();
+  res.json({
+    success: true,
+    token: session.token,
+    expiresAt: session.expiresAt,
+    remainingMs: Math.max(0, session.expiresAt - Date.now())
+  });
 });
 
 // GET /api/quickdrop/:token (public session lookup)

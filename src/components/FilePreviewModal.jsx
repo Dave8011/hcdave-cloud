@@ -260,7 +260,8 @@ export function FilePreviewModal({ initialFile, files = [], selectedPaths = new 
                   <span>{isSlideshow ? 'Pause' : 'Slideshow'}</span>
                 </button>
                 <select 
-                  className="custom-select"
+                  className="custom-select custom-select-sm"
+                  aria-label="Slideshow interval"
                   value={intervalSec} 
                   onChange={e => setIntervalSec(Number(e.target.value))}
                 >

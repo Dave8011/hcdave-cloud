@@ -168,6 +168,15 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
     }
   };
 
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   // Find active tab info
   const allTabs = TAB_GROUPS.flatMap(g => g.items);
   const activeTabMeta = allTabs.find(t => t.key === tab) || allTabs[0];
@@ -587,10 +596,10 @@ export function SettingsModal({ onClose, onSave, drives, initialTab = 'dashboard
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>Role:</span>
                             <select
-                              className="custom-select"
+                              className="custom-select custom-select-sm"
+                              aria-label={`Role for drive ${d.name}`}
                               value={driveRoles[d.uuid || d.id] || ''}
                               onChange={e => setDriveRoles({ ...driveRoles, [d.uuid || d.id]: e.target.value })}
-                              style={{ padding: '6px 28px 6px 12px', fontSize: '0.82rem' }}
                             >
                               <option value="">None</option>
                               <option value="Master">Master</option>

@@ -1226,6 +1226,28 @@ body::before {
   .mobile-menu-btn { order: 1; }
   .top-actions { order: 1; }
 
+  /* Mobile Modals & Popups */
+  .modal-overlay {
+    padding: 12px;
+    align-items: flex-end;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+  .modal-box {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 92vh;
+    padding: 20px 16px;
+    border-radius: 22px 22px 14px 14px;
+    box-shadow: 0 -10px 40px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.12);
+  }
+  .dropdown-menu {
+    max-width: calc(100vw - 24px);
+    right: 0 !important;
+    box-shadow: 0 14px 38px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.15) !important;
+    border-radius: 14px !important;
+  }
+
   /* Professional Mobile Cards */
   .file-card {
     padding: 16px 12px;
@@ -1276,26 +1298,111 @@ body::before {
     margin-top: 4px;
   }
 }
-/* ── Custom Select ── */
-.custom-select {
-  appearance: none;
-  background-color: var(--bg-card);
+/* ── Universal Inputs & Text Inputs ── */
+.txt-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--r-sm);
   color: var(--text-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xs);
-  padding: 6px 28px 6px 12px;
-  font-size: 0.85rem;
+  font-size: 0.88rem;
+  font-family: inherit;
+  outline: none;
+  transition: var(--transition);
+  box-sizing: border-box;
+  min-height: 40px;
+}
+.txt-input:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.06);
+}
+.txt-input:focus {
+  border-color: var(--indigo);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+.txt-input::placeholder {
+  color: var(--text-3);
+}
+.txt-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Custom Select & Universal Select ── */
+select,
+.custom-select,
+select.txt-input {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: rgba(18, 24, 38, 0.92);
+  color: var(--text-1);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--r-sm);
+  padding: 8px 36px 8px 13px;
+  font-size: 0.86rem;
+  font-family: inherit;
+  font-weight: 500;
   outline: none;
   cursor: pointer;
-  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>');
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 8px center;
-  transition: var(--transition);
+  background-position: right 12px center;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  min-height: 38px;
+  box-sizing: border-box;
 }
-.custom-select:hover { border-color: var(--text-3); }
-.custom-select option {
-  background-color: var(--bg-surface);
-  color: var(--text-1);
+
+.custom-select-sm,
+select.custom-select-sm {
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 4px 28px 4px 10px !important;
+  font-size: 0.78rem !important;
+  background-position: right 8px center !important;
+}
+
+select:hover,
+.custom-select:hover,
+select.txt-input:hover {
+  border-color: rgba(99, 102, 241, 0.55);
+  background-color: rgba(26, 34, 52, 0.96);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+
+select:focus,
+select:focus-visible,
+.custom-select:focus,
+.custom-select:focus-visible,
+select.txt-input:focus,
+select.txt-input:focus-visible {
+  border-color: var(--indigo);
+  background-color: rgba(22, 29, 45, 0.98);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.45), 0 0 16px rgba(99, 102, 241, 0.25);
+}
+
+select option,
+.custom-select option,
+select.txt-input option {
+  background-color: #0d121d !important;
+  color: #f1f5f9 !important;
+  padding: 10px 14px;
+  font-size: 0.88rem;
+}
+
+select option:checked,
+.custom-select option:checked {
+  background-color: #4f46e5 !important;
+  color: #ffffff !important;
+}
+
+select:disabled,
+.custom-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Action Dropdown Menu ── */
@@ -1521,11 +1628,6 @@ body::before {
 @keyframes slideUp {
   from { opacity: 0; transform: translate(-50%, 24px) scale(0.95); }
   to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
-}
-
-select option {
-  background: var(--bg-1);
-  color: var(--text-1);
 }
 
 select {

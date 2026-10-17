@@ -805,6 +805,17 @@ export class StorageService {
     return data;
   }
 
+  static async extendQuickDrop(token, params) {
+    const r = await fetch(`${this.getAgentUrl()}/api/quickdrop/${encodeURIComponent(token)}/extend`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(params)
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to extend session');
+    return data;
+  }
+
   static async getQuickDrop(token) {
     const r = await fetch(`${this.getAgentUrl()}/api/quickdrop/${encodeURIComponent(token)}`);
     const data = await r.json();

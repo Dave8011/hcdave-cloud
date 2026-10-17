@@ -223,8 +223,9 @@ export function FileExplorer({ files: rawFiles = [], isLoading, activeDrive, dri
 
         <div className="view-toggle">
           <select
-            className="custom-select"
+            className="custom-select custom-select-sm"
             value={typeFilter}
+            aria-label="Filter by file type"
             onChange={(e) => {
               setTypeFilter(e.target.value);
               setSelectedFiles(new Set());

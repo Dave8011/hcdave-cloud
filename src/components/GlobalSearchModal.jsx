@@ -407,10 +407,9 @@ export function GlobalSearchModal({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <HardDrive size={13} color="var(--indigo)" />
                 <select
-                  className="custom-select"
+                  className="custom-select custom-select-sm"
                   value={driveId}
                   onChange={(e) => setDriveId(e.target.value)}
-                  style={{ padding: '4px 26px 4px 10px', fontSize: '0.78rem' }}
                 >
                   <option value="all">All Connected Drives ({drives.length})</option>
                   {drives.map(d => (
@@ -425,10 +424,9 @@ export function GlobalSearchModal({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Clock size={13} color="var(--amber)" />
                 <select
-                  className="custom-select"
+                  className="custom-select custom-select-sm"
                   value={dateFilter}
                   onChange={(e) => setDateFilter(e.target.value)}
-                  style={{ padding: '4px 26px 4px 10px', fontSize: '0.78rem' }}
                 >
                   {DATE_OPTIONS.map(opt => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -440,10 +438,9 @@ export function GlobalSearchModal({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <FileType size={13} color="var(--violet)" />
                 <select
-                  className="custom-select"
+                  className="custom-select custom-select-sm"
                   value={sizeFilter}
                   onChange={(e) => setSizeFilter(e.target.value)}
-                  style={{ padding: '4px 26px 4px 10px', fontSize: '0.78rem' }}
                 >
                   {SIZE_OPTIONS.map(opt => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -455,10 +452,9 @@ export function GlobalSearchModal({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <ArrowUpDown size={13} color="var(--emerald)" />
                 <select
-                  className="custom-select"
+                  className="custom-select custom-select-sm"
                   value={sort}
                   onChange={(e) => setSort(e.target.value)}
-                  style={{ padding: '4px 26px 4px 10px', fontSize: '0.78rem' }}
                 >
                   {SORT_OPTIONS.map(opt => (
                     <option key={opt.value} value={opt.value}>Sort: {opt.label}</option>

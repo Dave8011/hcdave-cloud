@@ -81,6 +81,15 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
   const fileInputRef = useRef();
   const folderInputRef = useRef();
 
+  // Close on Escape key if not actively uploading
+  React.useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !uploading) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [uploading, onClose]);
+
   const addFlatFiles = (incoming) => {
     setFiles(prev => [...prev, ...Array.from(incoming)]);
   };
@@ -210,7 +219,13 @@ export function UploadModal({ activeDrive, currentPath, onClose, onUploadComplet
 
   return (
     <div className={minimized ? "upload-minimized-overlay" : "modal-overlay"} onClick={(!uploading && !minimized) ? onClose : undefined}>
-      <div className={minimized ? "upload-minimized-box" : "modal-box"} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={minimized ? "upload-minimized-box" : "modal-box"}
+        role="dialog"
+        aria-modal={!minimized}
+        aria-label="Upload to Drive"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-title-row">
           <div className="modal-title">Upload to {activeDrive?.name || 'Drive'}</div>
           <div style={{ display: 'flex', gap: 4 }}>

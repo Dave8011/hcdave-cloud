@@ -113,19 +113,29 @@ export function BackupPanel({ drives }) {
         <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-1)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
           <HardDrive size={14} color="var(--cyan)" /> Select Drives
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           <div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', marginBottom: 5 }}>SOURCE DRIVE (backup this)</div>
-            <select value={sourceDrive} onChange={e => setSourceDrive(e.target.value)}
-              style={{ width: '100%', background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-1)', borderRadius: 7, padding: '8px 10px', fontSize: '0.82rem', cursor: 'pointer' }}>
+            <select
+              value={sourceDrive}
+              onChange={e => setSourceDrive(e.target.value)}
+              className="custom-select"
+              aria-label="Source drive to backup"
+              style={{ width: '100%' }}
+            >
               <option value="">— Select drive —</option>
               {drives.map(d => <option key={d.id} value={d.id}>{d.name} ({d.usedGB}GB used)</option>)}
             </select>
           </div>
           <div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-3)', marginBottom: 5 }}>BACKUP DRIVE (save to)</div>
-            <select value={destDrive} onChange={e => setDestDrive(e.target.value)}
-              style={{ width: '100%', background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-1)', borderRadius: 7, padding: '8px 10px', fontSize: '0.82rem', cursor: 'pointer' }}>
+            <select
+              value={destDrive}
+              onChange={e => setDestDrive(e.target.value)}
+              className="custom-select"
+              aria-label="Backup target drive"
+              style={{ width: '100%' }}
+            >
               <option value="">— Select drive —</option>
               {drives.filter(d => d.id !== sourceDrive).map(d => <option key={d.id} value={d.id}>{d.name} ({d.freeGB}GB free)</option>)}
             </select>

@@ -30,14 +30,35 @@ export function RenameModal({ activeDrive, file, onClose, onComplete }) {
     }
   };
 
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !isRenaming) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isRenaming, onClose]);
+
   return (
     <div className="modal-overlay" onClick={() => !isRenaming && onClose()}>
-      <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>
+      <div
+        className="modal-box"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Rename Item"
+        onClick={e => e.stopPropagation()}
+        style={{ maxWidth: 400 }}
+      >
         <div className="modal-title-row">
           <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Edit2 size={18} /> Rename Item
           </div>
-          <button onClick={onClose} disabled={isRenaming} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4 }}>
+          <button
+            onClick={onClose}
+            disabled={isRenaming}
+            aria-label="Close"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4 }}
+          >
             <X size={20} />
           </button>
         </div>

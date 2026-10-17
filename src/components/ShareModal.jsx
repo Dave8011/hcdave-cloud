@@ -101,15 +101,36 @@ export function ShareModal({ file, files, driveId, onClose }) {
     } catch {} finally { setRevoking(null); }
   };
 
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !saving) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [saving, onClose]);
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+    <div className="modal-overlay" onClick={() => !saving && onClose()}>
+      <div
+        className="modal-box"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Share Items"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 440 }}
+      >
         <div className="modal-title-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Share2 size={20} color="var(--indigo)" />
             <span className="modal-title">Share {selectedItems.length > 1 ? 'Items' : (selectedItems[0]?.type === 'folder' ? 'Folder' : 'File')}</span>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)' }}>
+          <button
+            onClick={onClose}
+            disabled={saving}
+            aria-label="Close"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)' }}
+          >
             <X size={20} />
           </button>
         </div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, FolderPlus } from 'lucide-react';
 import { StorageService } from '../services/api';
 
@@ -6,6 +6,15 @@ export function NewFolderModal({ activeDriveId, currentPath, onClose, onSuccess 
   const [folderName, setFolderName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !loading) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [loading, onClose]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -24,8 +33,14 @@ export function NewFolderModal({ activeDriveId, currentPath, onClose, onSuccess 
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay" onClick={() => !loading && onClose()}>
+      <div
+        className="modal-box"
+        role="dialog"
+        aria-modal="true"
+        aria-label="New Folder"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-title-row">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <FolderPlus size={20} color="var(--amber)" />
@@ -33,6 +48,8 @@ export function NewFolderModal({ activeDriveId, currentPath, onClose, onSuccess 
           </div>
           <button
             onClick={onClose}
+            disabled={loading}
+            aria-label="Close"
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-3)', padding: 4 }}
           >
             <X size={20} />

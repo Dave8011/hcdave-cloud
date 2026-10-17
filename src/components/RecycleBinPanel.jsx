@@ -77,8 +77,11 @@ export function RecycleBinPanel({ drives, activeDriveId }) {
       {drives && drives.length > 1 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: '0.78rem', color: 'var(--text-3)' }}>Drive:</span>
-          <select value={activeDrive} onChange={e => setActiveDrive(e.target.value)}
-            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-1)', borderRadius: 7, padding: '5px 10px', fontSize: '0.82rem', cursor: 'pointer' }}>
+          <select
+            value={activeDrive}
+            onChange={e => setActiveDrive(e.target.value)}
+            className="custom-select"
+          >
             {drives.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>

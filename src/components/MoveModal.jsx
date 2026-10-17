@@ -81,12 +81,28 @@ export function MoveModal({ activeDrive, drives = [], pathsToMove, onClose, onCo
     }
   };
 
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && !isBusy) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isBusy, onClose]);
+
   const isCrossDrive = targetDriveId !== activeDrive.id;
   const actionLabel = isCrossDrive ? 'Copy to Drive' : (mode === 'copy' ? 'Copy Here' : 'Move Here');
 
   return (
     <div className="modal-overlay" onClick={() => !isBusy && onClose()}>
-      <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: 520, padding: 0 }}>
+      <div
+        className="modal-box"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Move or Copy Items"
+        onClick={e => e.stopPropagation()}
+        style={{ maxWidth: 520, padding: 0 }}
+      >
         <div className="modal-title-row" style={{ padding: '20px 24px 14px 24px', borderBottom: '1px solid var(--border)' }}>
           <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {isCrossDrive || mode === 'copy'
@@ -124,8 +140,13 @@ export function MoveModal({ activeDrive, drives = [], pathsToMove, onClose, onCo
                 <label style={{ fontSize: '0.78rem', color: 'var(--text-3)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
                   <HardDrive size={12} /> Target Drive
                 </label>
-                <select value={targetDriveId} onChange={e => setTargetDriveId(e.target.value)} disabled={isBusy}
-                  style={{ width: '100%', background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-1)', borderRadius: 8, padding: '8px 10px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                <select
+                  value={targetDriveId}
+                  onChange={e => setTargetDriveId(e.target.value)}
+                  disabled={isBusy}
+                  className="custom-select"
+                  style={{ width: '100%' }}
+                >
                   {drives.map(d => (
                     <option key={d.id} value={d.id}>
                       {d.name} {d.id === activeDrive.id ? '(current)' : `— ${d.freeGB} GB free`}
