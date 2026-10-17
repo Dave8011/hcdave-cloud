@@ -3717,6 +3717,8 @@ function updateBackupSpeed(bytes) {
   }
 }
 function setTargetManifestProgress(root, manifest, targetState) {
+  const mountedTarget = resolveMountedDrive(targetState.identityKey);
+  if (!isMountedDrive(mountedTarget)) throw new Error('Backup destination disconnected; checkpoint was not written to the system disk');
   manifest.lastRun = {
     status: targetState.status,
     bytesDone: targetState.bytesDone,
@@ -4003,6 +4005,9 @@ async function runBackupJob(sourceKey, targetKeys, options) {
   backupJob.filesDone = 0;
   backupJob.filesTotal = 0;
   backupJob.lastError = '';
+  backupJob.speedWindowBytes = 0;
+  backupJob.speedBytesPerSec = 0;
+  backupJob.lastSpeedMarkAt = Date.now();
   backupJob.startedAt = new Date().toISOString();
   backupJob.targets = targetsToProcess.map(k => {
     const d = resolveMountedDrive(k);
@@ -4154,11 +4159,14 @@ async function restoreResumableBackup(backupDrive, sourceIdentity, targetDrive) 
       backupRestoreJob.currentFile = rel;
       let first = true;
       for (const ch of version.chunks) {
+        if (!isMountedDrive(backupDrive) || !isMountedDrive(targetDrive)) throw new Error('Backup or restore drive disconnected');
         const inPath = safeChunkPath(root, ch);
         await pipeline(fs.createReadStream(inPath), zlib.createGunzip(), fs.createWriteStream(outPath, { flags: first ? 'w' : 'a' }));
         first = false;
         backupRestoreJob.bytesDone += ch.sourceBytes;
       }
+      const restoredStat = fs.statSync(outPath);
+      if (restoredStat.size !== version.sourceSize) throw new Error('Restored file size verification failed for ' + rel);
       backupRestoreJob.filesDone++;
     }
     backupRestoreJob.currentFile = '';
