@@ -2182,7 +2182,7 @@ app.post('/api/update', rateLimitAuth, auth, (req, res) => {
       try {
         // Copy application files while preserving live data/configuration.
         execSync(
-          'find "' + srcDir + '" -maxdepth 1 -type f ! -name ".env" ! -name "shares.json" ! -name "quickdrops.json" ! -name "remote_downloads.json" ! -name "token_response.json" ! -name "drive_roles.json" -exec cp -p {} "' + destDir + '/" +',
+          'find "' + srcDir + '" -maxdepth 1 -type f ! -name ".env" ! -name "shares.json" ! -name "quickdrops.json" ! -name "remote_downloads.json" ! -name "token_response.json" ! -name "drive_roles.json" -exec cp -p -t "' + destDir + '/" {} +',
           { stdio: 'ignore' }
         );
 
