@@ -433,6 +433,7 @@ async function updateDrives() {
           uuid:    uuid,
           identityKey,
           name:    savedName || normalDriveName(sub),
+          nameIsCustom: !!savedName,
           mount:   fullPath,
           type:    isSSD ? 'SSD' : 'HDD',
           role:    role,
